@@ -25,6 +25,9 @@ import {
   CalendarX2,
   Loader2,
   ChevronRight,
+  Lock,
+  Unlock,
+  KeyRound,
   type LucideIcon,
 } from "lucide-react";
 
@@ -127,6 +130,9 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   const [editing, setEditing] = useState<Partial<TokenDTO> | null>(null);
   const [historyFor, setHistoryFor] = useState<TokenDTO | null>(null);
   const [detailFor, setDetailFor] = useState<TokenDTO | null>(null);
+  const [isAuth, setIsAuth] = useState(false);
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
   const [confirmState, setConfirmState] = useState<{
     title: string;
     message: string;
@@ -161,8 +167,25 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   }, [load]);
 
   useEffect(() => {
-    if (sharedText) window.history.replaceState(null, "", "/");
-  }, [sharedText]);
+    // Check if auth cookie exists
+    const hasAuth = document.cookie.includes("fsm_auth=authenticated");
+    setIsAuth(hasAuth);
+  }, []);
+
+  const requireAuth = (action: () => void) => {
+    if (isAuth || document.cookie.includes("fsm_auth=authenticated")) {
+      action();
+    } else {
+      setPendingAction(() => action);
+      setShowLoginModal(true);
+    }
+  };
+
+  const logout = async () => {
+    await fetch("/api/auth", { method: "DELETE" }).catch(() => {});
+    setIsAuth(false);
+    notify("Logged out");
+  };
 
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -332,13 +355,35 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
             </div>
           </div>
 
-          <button
-            onClick={() => setEditing({})}
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-200 transition hover:bg-slate-700 hover:text-white active:scale-95"
-            aria-label="Add manually"
-          >
-            <Plus className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            {isAuth ? (
+              <button
+                onClick={logout}
+                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-2.5 text-xs font-semibold text-slate-300 transition hover:bg-slate-700 hover:text-white active:scale-95"
+                title="Logout"
+              >
+                <Unlock className="h-3.5 w-3.5 text-emerald-400" />
+                <span className="hidden xs:inline">Admin</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowLoginModal(true)}
+                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-2.5 text-xs font-semibold text-slate-400 transition hover:bg-slate-700 hover:text-white active:scale-95"
+                title="Login with daily PIN"
+              >
+                <Lock className="h-3.5 w-3.5" />
+                <span className="hidden xs:inline">Login</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => requireAuth(() => setEditing({}))}
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-200 transition hover:bg-slate-700 hover:text-white active:scale-95"
+              aria-label="Add manually"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Filter Tabs */}
@@ -459,8 +504,8 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
                 key={t._id}
                 t={t}
                 onSelect={() => setDetailFor(t)}
-                onUse={() => markUsed(t)}
-                onUndo={() => undoUse(t)}
+                onUse={() => requireAuth(() => markUsed(t))}
+                onUndo={() => requireAuth(() => undoUse(t))}
               />
             ))}
           </div>
@@ -485,18 +530,22 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
         <DetailModal
           token={detailFor}
           onClose={() => setDetailFor(null)}
-          onUse={() => markUsed(detailFor)}
-          onUndo={() => undoUse(detailFor)}
+          onUse={() => requireAuth(() => markUsed(detailFor))}
+          onUndo={() => requireAuth(() => undoUse(detailFor))}
           onCopy={() => copy(detailFor.tokenNumber)}
           onEdit={() => {
             const t = detailFor;
-            setDetailFor(null);
-            setEditing(t);
+            requireAuth(() => {
+              setDetailFor(null);
+              setEditing(t);
+            });
           }}
           onDelete={() => {
             const t = detailFor;
-            setDetailFor(null);
-            remove(t);
+            requireAuth(() => {
+              setDetailFor(null);
+              remove(t);
+            });
           }}
           onHistory={() => {
             const t = detailFor;
@@ -538,6 +587,27 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
 
       {/* History Modal */}
       {historyFor && <HistoryModal token={historyFor} onClose={() => setHistoryFor(null)} />}
+
+      {/* Daily PIN Login Modal */}
+      {showLoginModal && (
+        <LoginModal
+          onClose={() => {
+            setShowLoginModal(false);
+            setPendingAction(null);
+          }}
+          onSuccess={() => {
+            setIsAuth(true);
+            setShowLoginModal(false);
+            notify("Authenticated successfully");
+            if (pendingAction) {
+              const act = pendingAction;
+              setPendingAction(null);
+              act();
+            }
+          }}
+          onError={(m) => notify(m, true)}
+        />
+      )}
 
       {/* Confirmation Modal */}
       {confirmState && (
@@ -1269,6 +1339,96 @@ function HistoryModal({ token, onClose }: { token: TokenDTO; onClose: () => void
           ))}
         </div>
       )}
+    </ModalSheet>
+  );
+}
+
+/* ---------------- Login Modal (Daily Dynamic PIN) ---------------- */
+
+function LoginModal({
+  onClose,
+  onSuccess,
+  onError,
+}: {
+  onClose: () => void;
+  onSuccess: () => void;
+  onError: (m: string) => void;
+}) {
+  const [pin, setPin] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!pin.trim()) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: pin.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || "Invalid PIN");
+      }
+      onSuccess();
+    } catch (err: unknown) {
+      onError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ModalSheet
+      title="Admin Access Required"
+      subtitle="Enter today's dynamic security PIN"
+      onClose={onClose}
+      footer={
+        <div className="flex gap-2">
+          <button
+            className="flex-1 h-11 rounded-xl bg-emerald-500 text-sm font-bold text-slate-950 hover:bg-emerald-400 active:scale-98 transition-colors disabled:opacity-50"
+            onClick={() => handleSubmit()}
+            disabled={!pin.trim() || loading}
+          >
+            {loading ? "Verifying..." : "Unlock Access"}
+          </button>
+          <button
+            className="h-11 rounded-xl border border-slate-700 bg-slate-800 px-4 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+        </div>
+      }
+    >
+      <form onSubmit={handleSubmit} className="space-y-3.5 py-1">
+        <div className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-900 p-3.5">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400">
+            <KeyRound className="h-5 w-5" />
+          </div>
+          <div className="text-xs text-slate-300 leading-relaxed">
+            <span className="font-bold text-white block">Daily Security Formula:</span>
+            <span>Current date (YYYYMMDD or DDMMYYYY) + </span>
+            <span className="font-mono text-emerald-400 font-bold">123321</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
+            Security PIN
+          </label>
+          <input
+            autoFocus
+            type="password"
+            inputMode="numeric"
+            value={pin}
+            onChange={(e) => setPin(e.target.value)}
+            placeholder="e.g. 20261031123321 or 31102026123321"
+            className="input text-base tracking-wider font-mono"
+          />
+        </div>
+      </form>
     </ModalSheet>
   );
 }

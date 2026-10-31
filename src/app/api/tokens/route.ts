@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/mongodb";
 import { Token } from "@/models/Token";
 import { serializeToken } from "@/lib/serialize";
 import { normalizeVehicle } from "@/lib/parseSms";
+import { isAuthenticated } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,9 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!isAuthenticated(req)) {
+      return NextResponse.json({ error: "Unauthorized. Please login to add tokens." }, { status: 401 });
+    }
     await dbConnect();
     const body = await req.json();
     const tokenNumber = String(body.tokenNumber ?? "").trim();

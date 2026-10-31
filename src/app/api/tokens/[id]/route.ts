@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/mongodb";
 import { Token } from "@/models/Token";
 import { serializeToken } from "@/lib/serialize";
 import { normalizeVehicle } from "@/lib/parseSms";
+import { isAuthenticated } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,9 @@ type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: NextRequest, { params }: Ctx) {
   try {
+    if (!isAuthenticated(req)) {
+      return NextResponse.json({ error: "Unauthorized. Please login to edit tokens." }, { status: 401 });
+    }
     await dbConnect();
     const { id } = await params;
     const body = await req.json();
@@ -35,8 +39,11 @@ export async function PATCH(req: NextRequest, { params }: Ctx) {
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: Ctx) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
   try {
+    if (!isAuthenticated(req)) {
+      return NextResponse.json({ error: "Unauthorized. Please login to delete tokens." }, { status: 401 });
+    }
     await dbConnect();
     const { id } = await params;
     await Token.findByIdAndDelete(id);

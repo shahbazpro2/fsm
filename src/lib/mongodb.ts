@@ -1,16 +1,27 @@
 import mongoose from "mongoose";
 
-const MONGODB_URI = process.env.MONGODB_URI ?? "mongodb://127.0.0.1:27017/fuel-tokens";
-
 type Cache = { conn: typeof mongoose | null; promise: Promise<typeof mongoose> | null };
 const g = globalThis as unknown as { _mongoose?: Cache };
 const cached: Cache = g._mongoose ?? (g._mongoose = { conn: null, promise: null });
 
 export async function dbConnect() {
-  if (cached.conn) return cached.conn;
-  if (!cached.promise) {
-    cached.promise = mongoose.connect(MONGODB_URI, { bufferCommands: false });
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    throw new Error(
+      "MONGODB_URI is not set in environment variables. Please add MONGODB_URI in Vercel Project Settings > Environment Variables."
+    );
   }
+
+  if (cached.conn) return cached.conn;
+
+  if (!cached.promise) {
+    const opts: mongoose.ConnectOptions = {
+      bufferCommands: false,
+      serverSelectionTimeoutMS: 8000, // Timeout faster on serverless rather than hanging 30s
+    };
+    cached.promise = mongoose.connect(uri, opts);
+  }
+
   try {
     cached.conn = await cached.promise;
   } catch (e) {

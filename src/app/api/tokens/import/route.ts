@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/mongodb";
 import { Token } from "@/models/Token";
 import { serializeToken } from "@/lib/serialize";
 import { parseTokenSms } from "@/lib/parseSms";
+import { getStatus } from "@/lib/status";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
 
     const results = [];
     for (const p of parsed) {
-      const existing = await Token.findOne({ tokenNumber: p.tokenNumber });
+      let existing = await Token.findOne({ tokenNumber: p.tokenNumber });
       let phone = String(phoneNumber ?? "").trim();
       if (!phone && p.vehicleNumber) {
         const sibling = await Token.findOne({
@@ -46,30 +47,81 @@ export async function POST(req: NextRequest) {
         phone = sibling?.phoneNumber ?? "";
       }
 
+      // If no token found by exact tokenNumber, check if there is an existing record
+      // for the same vehicle (and phone) that is currently NOT active (used/cooldown or expired).
+      // Requirement: "When again paste same number and vehicle number token sms need to update existing if already are not active"
+      if (!existing && p.vehicleNumber) {
+        const vehicleRegex = new RegExp(
+          `^${p.vehicleNumber.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`,
+          "i"
+        );
+
+        let candidate = null;
+        if (phone) {
+          candidate = await Token.findOne({
+            vehicleNumber: vehicleRegex,
+            phoneNumber: phone,
+          }).sort({ updatedAt: -1 });
+        }
+        if (!candidate) {
+          candidate = await Token.findOne({
+            vehicleNumber: vehicleRegex,
+          }).sort({ updatedAt: -1 });
+        }
+
+        if (candidate) {
+          const statusInfo = getStatus(candidate);
+          const isNotActive = statusInfo.status !== "available" || candidate.lastUsedAt != null;
+          if (isNotActive) {
+            existing = candidate;
+          }
+        }
+      }
+
       if (preview) {
         results.push({
           ...p,
           phoneNumber: existing?.phoneNumber || phone,
           action: existing ? "update" : "create",
+          isInactiveRenewal: existing && existing.tokenNumber !== p.tokenNumber,
         });
         continue;
       }
 
       if (existing) {
+        // If updating an existing record whose tokenNumber differs, avoid collision with another doc
+        if (existing.tokenNumber !== p.tokenNumber) {
+          const duplicate = await Token.findOne({ tokenNumber: p.tokenNumber });
+          if (duplicate && String(duplicate._id) !== String(existing._id)) {
+            existing = duplicate;
+          } else {
+            existing.tokenNumber = p.tokenNumber;
+          }
+        }
+
         if (p.vehicleNumber) existing.vehicleNumber = p.vehicleNumber;
         if (p.amount !== null) existing.amount = p.amount;
         if (p.validUntil) existing.validUntil = new Date(p.validUntil);
-        if (!existing.phoneNumber && phone) existing.phoneNumber = phone;
+        if (phone) existing.phoneNumber = phone;
         existing.lastSms = p.raw;
 
-        // If the imported SMS explicitly says relief was already availed:
-        if (p.isAlreadyUsed && !existing.lastUsedAt) {
-          existing.lastUsedAt = new Date();
-          existing.usageHistory.push({
-            usedAt: new Date(),
-            amount: p.amount ?? existing.amount,
-            note: "Marked used from SMS",
-          });
+        if (p.isAlreadyUsed) {
+          // If the imported SMS explicitly says relief was already availed:
+          if (!existing.lastUsedAt) {
+            existing.lastUsedAt = new Date();
+            existing.usageHistory.push({
+              usedAt: new Date(),
+              amount: p.amount ?? existing.amount,
+              note: "Marked used from SMS",
+            });
+          }
+        } else {
+          // The imported SMS is an active allocation ("حاصل کر سکتے ہیں").
+          // If the token was previously inactive (marked used or expired), reactivate it!
+          const statusInfo = getStatus(existing);
+          if (statusInfo.status !== "available" || existing.lastUsedAt) {
+            existing.lastUsedAt = null;
+          }
         }
 
         await existing.save();

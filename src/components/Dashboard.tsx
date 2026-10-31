@@ -559,6 +559,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
       {importText !== null && (
         <ImportModal
           initial={importText}
+          existingTokens={tokens}
           onClose={() => setImportText(null)}
           onDone={(msg) => {
             setImportText(null);
@@ -1065,11 +1066,13 @@ function DetailModal({
 
 function ImportModal({
   initial,
+  existingTokens = [],
   onClose,
   onDone,
   onError,
 }: {
   initial: string;
+  existingTokens?: TokenDTO[];
   onClose: () => void;
   onDone: (msg: string) => void;
   onError: (m: string) => void;
@@ -1078,6 +1081,22 @@ function ImportModal({
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const parsed: ParsedToken[] = useMemo(() => parseTokenSms(text), [text]);
+
+  const previewMatches = useMemo(() => {
+    return parsed.map((p) => {
+      const match = existingTokens.find(
+        (t) =>
+          t.tokenNumber === p.tokenNumber ||
+          (p.vehicleNumber &&
+            t.vehicleNumber.toUpperCase() === p.vehicleNumber.toUpperCase() &&
+            (!phone.trim() || !t.phoneNumber || t.phoneNumber === phone.trim()) &&
+            t.status !== "available")
+      );
+      return { p, match };
+    });
+  }, [parsed, existingTokens, phone]);
+
+  const hasUpdates = previewMatches.some((m) => !!m.match);
 
   const submit = async () => {
     setBusy(true);
@@ -1113,6 +1132,8 @@ function ImportModal({
                 <Loader2 className="h-4 w-4 animate-spin" />
                 <span>Saving...</span>
               </span>
+            ) : hasUpdates ? (
+              parsed.length > 1 ? `Save & Update ${parsed.length} Tokens` : "Save & Update Token"
             ) : parsed.length ? (
               `Save ${parsed.length} Token${parsed.length > 1 ? "s" : ""}`
             ) : (
@@ -1166,15 +1187,28 @@ function ImportModal({
           </div>
         ) : (
           <div className="space-y-2">
-            {parsed.map((p) => (
+            {previewMatches.map(({ p, match }) => (
               <div
                 key={p.tokenNumber}
-                className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3 text-xs"
+                className={`rounded-xl border p-3 text-xs ${
+                  match
+                    ? "border-sky-500/40 bg-sky-950/20"
+                    : "border-emerald-500/30 bg-emerald-950/20"
+                }`}
               >
                 <div className="flex items-center justify-between text-slate-200">
-                  <span className="font-mono font-bold text-sm text-emerald-400">
-                    {p.tokenNumber}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-sm text-emerald-400">
+                      {p.tokenNumber}
+                    </span>
+                    {match && (
+                      <span className="rounded bg-sky-500/15 border border-sky-500/30 px-1.5 py-0.5 text-[10px] font-medium text-sky-300">
+                        {match.tokenNumber === p.tokenNumber
+                          ? "Updates existing token"
+                          : `Updates inactive ${match.vehicleNumber}`}
+                      </span>
+                    )}
+                  </div>
                   <span className="font-semibold">{p.amount != null ? `Rs ${p.amount}` : ""}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between text-slate-400">

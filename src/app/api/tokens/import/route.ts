@@ -104,6 +104,8 @@ export async function POST(req: NextRequest) {
       message = "Database connection failed. Please check your MONGODB_URI on Vercel and ensure Atlas IP Access List allows 0.0.0.0/0.";
     } else if (message.includes("bad auth") || message.includes("Authentication failed")) {
       message = "MongoDB authentication failed. Please verify your Atlas database username and password in MONGODB_URI.";
+    } else if (message.includes("different case")) {
+      message = "Database name case mismatch in Atlas. Please check your MONGODB_URI or ensure the database name matches 'Fsm'.";
     }
 
     return NextResponse.json({ error: message }, { status: 500 });

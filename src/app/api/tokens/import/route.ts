@@ -61,15 +61,32 @@ export async function POST(req: NextRequest) {
         if (p.validUntil) existing.validUntil = new Date(p.validUntil);
         if (!existing.phoneNumber && phone) existing.phoneNumber = phone;
         existing.lastSms = p.raw;
+
+        // If the imported SMS explicitly says relief was already availed:
+        if (p.isAlreadyUsed && !existing.lastUsedAt) {
+          existing.lastUsedAt = new Date();
+          existing.usageHistory.push({
+            usedAt: new Date(),
+            amount: p.amount ?? existing.amount,
+            note: "Marked used from SMS",
+          });
+        }
+
         await existing.save();
         results.push({ action: "updated", token: serializeToken(existing) });
       } else {
+        const isUsed = !!p.isAlreadyUsed;
+        const now = new Date();
         const doc = await Token.create({
           tokenNumber: p.tokenNumber,
           vehicleNumber: p.vehicleNumber || "UNKNOWN",
           phoneNumber: phone,
           amount: p.amount,
           validUntil: p.validUntil ? new Date(p.validUntil) : null,
+          lastUsedAt: isUsed ? now : null,
+          usageHistory: isUsed
+            ? [{ usedAt: now, amount: p.amount, note: "Imported as availed from SMS" }]
+            : [],
           lastSms: p.raw,
         });
         results.push({ action: "created", token: serializeToken(doc) });

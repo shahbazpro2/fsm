@@ -12,6 +12,10 @@ export interface ParsedToken {
   amount: number | null;
   /** ISO string of the "valid until" moment (Pakistan time, UTC+5) */
   validUntil: string | null;
+  /** Whether the message indicates this token was already used/availed */
+  isAlreadyUsed?: boolean;
+  /** ISO string of when next token can be generated if mentioned in SMS */
+  nextAvailableAt?: string | null;
   raw: string;
 }
 
@@ -69,11 +73,21 @@ function parseOne(text: string): ParsedToken | null {
   const dt = t.match(/(\d{1,2}:\d{2})\s+(\d{1,2})[-\s/]([A-Za-z]{3,9})/);
   const validUntil = dt ? buildValidUntil(dt[1], dt[2], dt[3]) : null;
 
+  // Check if message says relief was already availed ("حاصل کرلیا")
+  const isAlreadyUsed = /حاصل\s*کر\s*لیا|حاصل\s*کیا|حاصل\s*کرلیا|utilized|availed|received/i.test(t);
+  const nextTokenMatch = t.match(/اگلا\s*ٹوکن\s*(?:بنا\s*سکتے)?.*?(\d{1,2})[-\s/]([A-Za-z]{3,9})/i);
+  let nextAvailableAt: string | null = null;
+  if (nextTokenMatch) {
+    nextAvailableAt = buildValidUntil("00:00", nextTokenMatch[1], nextTokenMatch[2]);
+  }
+
   return {
     tokenNumber: token,
     vehicleNumber: normalizeVehicle(vehicle),
     amount,
     validUntil,
+    isAlreadyUsed,
+    nextAvailableAt,
     raw: text.trim(),
   };
 }

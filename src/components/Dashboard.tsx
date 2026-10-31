@@ -254,8 +254,19 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
       replace(await api<TokenDTO>(`/api/tokens/${t._id}/use`, { method: "POST", body: JSON.stringify({ force }) }));
       vibrate(30);
       notify(`${t.vehicleNumber} marked as used`);
-    } catch (e) {
-      notify((e as Error).message, true);
+    } catch (e: unknown) {
+      const err = e as Error;
+      // If server reports cooldown (409 conflict), ask confirmation directly with clean popup
+      if (err.message.includes("cooldown")) {
+        setConfirmState({
+          title: "Token in Cooldown",
+          message: `${err.message}. Do you still want to mark it as used?`,
+          action: "Mark Used Anyway",
+          onYes: () => doUse(t, true),
+        });
+      } else {
+        notify(err.message, true);
+      }
     }
   };
 

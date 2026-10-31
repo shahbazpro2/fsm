@@ -28,6 +28,8 @@ import {
   Lock,
   Unlock,
   KeyRound,
+  PlusCircle,
+  FileText,
   type LucideIcon,
 } from "lucide-react";
 
@@ -153,24 +155,25 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   const load = useCallback(async () => {
     try {
       setTokens(await api<TokenDTO[]>("/api/tokens"));
-    } catch (e) {
-      notify((e as Error).message, true);
+    } catch {
+      // Unauthenticated / locked state: clear tokens without error toast
+      setTokens([]);
     } finally {
       setLoading(false);
     }
-  }, [notify]);
+  }, []);
 
   useEffect(() => {
-    load();
+    const hasAuth = document.cookie.includes("fsm_auth=authenticated");
+    setIsAuth(hasAuth);
+    if (hasAuth) {
+      load();
+    } else {
+      setLoading(false);
+    }
     const i = setInterval(() => setTick((t) => t + 1), 60000);
     return () => clearInterval(i);
   }, [load]);
-
-  useEffect(() => {
-    // Check if auth cookie exists
-    const hasAuth = document.cookie.includes("fsm_auth=authenticated");
-    setIsAuth(hasAuth);
-  }, []);
 
   const requireAuth = (action: () => void) => {
     if (isAuth || document.cookie.includes("fsm_auth=authenticated")) {
@@ -184,7 +187,8 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   const logout = async () => {
     await fetch("/api/auth", { method: "DELETE" }).catch(() => {});
     setIsAuth(false);
-    notify("Logged out");
+    setTokens([]);
+    notify("Locked / Logged out");
   };
 
   useEffect(() => {
@@ -357,171 +361,281 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
 
           <div className="flex items-center gap-1.5">
             {isAuth ? (
-              <button
-                onClick={logout}
-                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-2.5 text-xs font-semibold text-slate-300 transition hover:bg-slate-700 hover:text-white active:scale-95"
-                title="Logout"
-              >
-                <Unlock className="h-3.5 w-3.5 text-emerald-400" />
-                <span className="hidden xs:inline">Admin</span>
-              </button>
+              <>
+                <button
+                  onClick={logout}
+                  className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-2.5 text-xs font-semibold text-slate-300 transition hover:bg-slate-700 hover:text-white active:scale-95"
+                  title="Logout"
+                >
+                  <Unlock className="h-3.5 w-3.5 text-emerald-400" />
+                  <span className="hidden xs:inline">Admin</span>
+                </button>
+
+                <button
+                  onClick={() => requireAuth(() => setEditing({}))}
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-200 transition hover:bg-slate-700 hover:text-white active:scale-95"
+                  aria-label="Add manually"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </>
             ) : (
               <button
                 onClick={() => setShowLoginModal(true)}
-                className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-2.5 text-xs font-semibold text-slate-400 transition hover:bg-slate-700 hover:text-white active:scale-95"
-                title="Login with daily PIN"
+                className="flex h-9 items-center gap-1.5 rounded-xl bg-white px-3 text-xs font-bold text-slate-950 transition hover:bg-slate-100 active:scale-95"
+                title="Login to unlock"
               >
-                <Lock className="h-3.5 w-3.5" />
-                <span className="hidden xs:inline">Login</span>
+                <Lock className="h-3.5 w-3.5 text-slate-950" />
+                <span>Login</span>
               </button>
             )}
-
-            <button
-              onClick={() => requireAuth(() => setEditing({}))}
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-200 transition hover:bg-slate-700 hover:text-white active:scale-95"
-              aria-label="Add manually"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
           </div>
         </div>
 
-        {/* Filter Tabs */}
-        <div className="mx-auto max-w-lg px-4 pb-2.5">
-          <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
-            {TABS.map((tab) => {
-              const active = filter === tab.key;
-              const count = counts[tab.key];
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => {
-                    setFilter(tab.key);
-                    vibrate(8);
-                  }}
-                  className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
-                    active
-                      ? "bg-white text-slate-950"
-                      : "border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  <span>{tab.label}</span>
-                  <span
-                    className={`rounded px-1.5 py-0.2 text-[10px] font-mono ${
-                      active ? "bg-slate-200 text-slate-950" : "bg-slate-800 text-slate-400"
+        {/* Filter Tabs - Only shown when logged in */}
+        {isAuth && (
+          <div className="mx-auto max-w-lg px-4 pb-2.5">
+            <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+              {TABS.map((tab) => {
+                const active = filter === tab.key;
+                const count = counts[tab.key];
+                return (
+                  <button
+                    key={tab.key}
+                    onClick={() => {
+                      setFilter(tab.key);
+                      vibrate(8);
+                    }}
+                    className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      active
+                        ? "bg-white text-slate-950"
+                        : "border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
                     }`}
                   >
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
+                    <span>{tab.label}</span>
+                    <span
+                      className={`rounded px-1.5 py-0.2 text-[10px] font-mono ${
+                        active ? "bg-slate-200 text-slate-950" : "bg-slate-800 text-slate-400"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </header>
 
       {/* Main Content Area */}
       <main className="mx-auto max-w-lg px-4 pb-36 pt-3">
-        {/* Search Bar */}
-        <div className="relative mb-3">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search vehicle or phone..."
-            inputMode="search"
-            className="input pl-9 pr-9"
-          />
-          {q && (
-            <button
-              onClick={() => setQ("")}
-              aria-label="Clear search"
-              className="absolute right-3 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
+        {!isAuth ? (
+          /* LOCKED VIEW: Only show Add New Record options + Protected Notice */
+          <div className="space-y-4 pt-2">
+            {/* Clipboard Banner if token detected */}
+            {clipboardHint && (
+              <div className="animate-fade rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-4">
+                <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
+                  <ClipboardCheck className="h-4 w-4" />
+                  <span>Token detected in clipboard</span>
+                </div>
+                <p dir="rtl" className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-slate-300">
+                  {clipboardHint}
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    className="flex-1 rounded-xl bg-emerald-500 py-2 text-xs font-bold text-slate-950 transition hover:bg-emerald-400 active:scale-98"
+                    onClick={() => {
+                      setImportText(clipboardHint);
+                      setClipboardHint(null);
+                    }}
+                  >
+                    Import Token Now
+                  </button>
+                  <button
+                    className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-white"
+                    onClick={() => setClipboardHint(null)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
 
-        {/* Clipboard Snippet Detection Banner */}
-        {clipboardHint && (
-          <div className="animate-fade mb-3 rounded-xl border border-slate-700 bg-slate-900 p-3">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
-              <ClipboardCheck className="h-4 w-4" />
-              <span>Token detected in clipboard</span>
-            </div>
-            <p dir="rtl" className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-300">
-              {clipboardHint}
-            </p>
-            <div className="mt-2.5 flex gap-2">
-              <button
-                className="flex-1 rounded-lg bg-emerald-500 py-1.5 text-xs font-bold text-slate-950 transition hover:bg-emerald-400 active:scale-98"
-                onClick={() => {
-                  setImportText(clipboardHint);
-                  setClipboardHint(null);
-                }}
-              >
-                Import Token
-              </button>
-              <button
-                className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white"
-                onClick={() => setClipboardHint(null)}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
+            {/* Add New Record Section */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+              <div className="flex items-center gap-2.5 mb-1.5">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
+                  <PlusCircle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-100">Add New Record</h2>
+                  <p className="text-xs text-slate-400">Paste SMS notification to add or update token</p>
+                </div>
+              </div>
 
-        {/* Tokens List */}
-        {loading ? (
-          <div className="space-y-2">
-            {[0, 1, 2].map((i) => (
-              <div
-                key={i}
-                className="h-20 animate-pulse rounded-xl border border-slate-800 bg-slate-900"
-              />
-            ))}
-          </div>
-        ) : visible.length === 0 ? (
-          <div className="mt-12 rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center">
-            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-800 text-slate-400">
-              <Fuel className="h-6 w-6" />
+              <div className="mt-4 space-y-2.5">
+                <button
+                  onClick={pasteFromClipboard}
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-950 transition hover:bg-slate-100 active:scale-98"
+                >
+                  <ClipboardPaste className="h-4 w-4 text-slate-950" />
+                  <span>Paste SMS from Clipboard</span>
+                </button>
+
+                <button
+                  onClick={() => setImportText("")}
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 text-xs font-bold text-slate-200 transition hover:bg-slate-700 hover:text-white active:scale-98"
+                >
+                  <FileText className="h-4 w-4 text-slate-400" />
+                  <span>Type or Paste SMS Text</span>
+                </button>
+              </div>
             </div>
-            <h3 className="text-sm font-semibold text-slate-200">
-              {tokens.length === 0 ? "No tokens yet" : "No matching tokens"}
-            </h3>
-            <p className="mt-1 text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
-              {tokens.length === 0
-                ? "Copy a token SMS and tap Paste SMS below to auto-import."
-                : "Try a different search or filter tab."}
-            </p>
+
+            {/* Locked Records Notice */}
+            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-center">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-amber-400">
+                <Lock className="h-5 w-5" />
+              </div>
+              <h3 className="text-sm font-bold text-slate-200">Records Protected</h3>
+              <p className="mt-1 text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+                Login to view registered vehicles, active tokens, cooldown timers, and manage claims.
+              </p>
+              <button
+                onClick={() => setShowLoginModal(true)}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-slate-700 active:scale-95"
+              >
+                <KeyRound className="h-4 w-4 text-emerald-400" />
+                <span>Login to View All Options</span>
+              </button>
+            </div>
           </div>
         ) : (
-          <div className="space-y-2.5">
-            {visible.map((t) => (
-              <TokenListItem
-                key={t._id}
-                t={t}
-                onSelect={() => setDetailFor(t)}
-                onUse={() => requireAuth(() => markUsed(t))}
-                onUndo={() => requireAuth(() => undoUse(t))}
+          /* UNLOCKED VIEW: Search Bar + Tokens List */
+          <>
+            {/* Search Bar */}
+            <div className="relative mb-3">
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search vehicle or phone..."
+                inputMode="search"
+                className="input pl-9 pr-9"
               />
-            ))}
-          </div>
+              {q && (
+                <button
+                  onClick={() => setQ("")}
+                  aria-label="Clear search"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+
+            {/* Clipboard Snippet Detection Banner */}
+            {clipboardHint && (
+              <div className="animate-fade mb-3 rounded-xl border border-slate-700 bg-slate-900 p-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+                  <ClipboardCheck className="h-4 w-4" />
+                  <span>Token detected in clipboard</span>
+                </div>
+                <p dir="rtl" className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-300">
+                  {clipboardHint}
+                </p>
+                <div className="mt-2.5 flex gap-2">
+                  <button
+                    className="flex-1 rounded-lg bg-emerald-500 py-1.5 text-xs font-bold text-slate-950 transition hover:bg-emerald-400 active:scale-98"
+                    onClick={() => {
+                      setImportText(clipboardHint);
+                      setClipboardHint(null);
+                    }}
+                  >
+                    Import Token
+                  </button>
+                  <button
+                    className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white"
+                    onClick={() => setClipboardHint(null)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Tokens List */}
+            {loading ? (
+              <div className="space-y-2">
+                {[0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className="h-20 animate-pulse rounded-xl border border-slate-800 bg-slate-900"
+                  />
+                ))}
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="mt-12 rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-800 text-slate-400">
+                  <Fuel className="h-6 w-6" />
+                </div>
+                <h3 className="text-sm font-semibold text-slate-200">
+                  {tokens.length === 0 ? "No tokens yet" : "No matching tokens"}
+                </h3>
+                <p className="mt-1 text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+                  {tokens.length === 0
+                    ? "Copy a token SMS and tap Paste SMS below to auto-import."
+                    : "Try a different search or filter tab."}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {visible.map((t) => (
+                  <TokenListItem
+                    key={t._id}
+                    t={t}
+                    onSelect={() => setDetailFor(t)}
+                    onUse={() => requireAuth(() => markUsed(t))}
+                    onUndo={() => requireAuth(() => undoUse(t))}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </main>
 
       {/* Floating Bottom Action Bar */}
       <div className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-slate-800 bg-[#090d16] p-3">
         <div className="mx-auto max-w-lg">
-          <button
-            onClick={pasteFromClipboard}
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-950 transition-colors hover:bg-slate-100 active:scale-[0.98]"
-          >
-            <ClipboardPaste className="h-4 w-4 text-slate-900" />
-            <span>Paste SMS from Clipboard</span>
-          </button>
+          {isAuth ? (
+            <button
+              onClick={pasteFromClipboard}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-950 transition-colors hover:bg-slate-100 active:scale-[0.98]"
+            >
+              <ClipboardPaste className="h-4 w-4 text-slate-900" />
+              <span>Paste SMS from Clipboard</span>
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                onClick={pasteFromClipboard}
+                className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-950 transition-colors hover:bg-slate-100 active:scale-[0.98]"
+              >
+                <ClipboardPaste className="h-4 w-4 text-slate-900" />
+                <span>Paste SMS</span>
+              </button>
+              <button
+                onClick={() => setShowLoginModal(true)}
+                className="flex h-12 items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 text-xs font-bold text-slate-200 transition-colors hover:bg-slate-700 active:scale-[0.98]"
+              >
+                <Lock className="h-4 w-4 text-amber-400" />
+                <span>Login</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1415,7 +1529,7 @@ function LoginModal({
   return (
     <ModalSheet
       title="Admin Access Required"
-      subtitle="Enter today's dynamic security PIN"
+      subtitle="Enter security PIN to unlock records"
       onClose={onClose}
       footer={
         <div className="flex gap-2">
@@ -1435,18 +1549,7 @@ function LoginModal({
         </div>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-3.5 py-1">
-        <div className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-900 p-3.5">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400">
-            <KeyRound className="h-5 w-5" />
-          </div>
-          <div className="text-xs text-slate-300 leading-relaxed">
-            <span className="font-bold text-white block">Daily Security Formula:</span>
-            <span>Current date (YYYYMMDD or DDMMYYYY) + </span>
-            <span className="font-mono text-emerald-400 font-bold">123321</span>
-          </div>
-        </div>
-
+      <form onSubmit={handleSubmit} className="space-y-4 py-2">
         <div>
           <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
             Security PIN
@@ -1457,8 +1560,8 @@ function LoginModal({
             inputMode="numeric"
             value={pin}
             onChange={(e) => setPin(e.target.value)}
-            placeholder="e.g. 20261031123321 or 31102026123321"
-            className="input text-base tracking-wider font-mono"
+            placeholder="Enter PIN"
+            className="input text-base tracking-widest font-mono"
           />
         </div>
       </form>

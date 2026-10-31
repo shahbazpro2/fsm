@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifyPin, getExpectedPins } from "@/lib/auth";
+import { verifyPin, isAuthenticated } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
 
     if (!verifyPin(String(pin))) {
       return NextResponse.json(
-        { error: "Incorrect PIN. The PIN is today's date + 123321." },
+        { error: "Incorrect security PIN. Access denied." },
         { status: 401 }
       );
     }
@@ -39,10 +39,6 @@ export async function DELETE() {
   return res;
 }
 
-export async function GET() {
-  // Returns today's active format hints for convenient login
-  const pins = getExpectedPins();
-  return NextResponse.json({
-    hint: `Format: YYYYMMDD123321 (e.g. ${pins[0]}) or DDMMYYYY123321 (e.g. ${pins[1]})`,
-  });
+export async function GET(req: NextRequest) {
+  return NextResponse.json({ authenticated: isAuthenticated(req) });
 }

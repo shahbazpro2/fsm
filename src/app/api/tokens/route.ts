@@ -7,8 +7,11 @@ import { isAuthenticated } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    if (!isAuthenticated(req)) {
+      return NextResponse.json({ error: "Unauthorized. Please login to view records." }, { status: 401 });
+    }
     await dbConnect();
     const docs = await Token.find().sort({ vehicleNumber: 1, tokenNumber: 1 }).lean();
     return NextResponse.json(docs.map(serializeToken));

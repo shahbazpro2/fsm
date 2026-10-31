@@ -3,7 +3,6 @@ import { dbConnect } from "@/lib/mongodb";
 import { Token } from "@/models/Token";
 import { serializeToken } from "@/lib/serialize";
 import { parseTokenSms } from "@/lib/parseSms";
-import { getStatus } from "@/lib/status";
 
 export const dynamic = "force-dynamic";
 
@@ -47,9 +46,9 @@ export async function POST(req: NextRequest) {
         phone = sibling?.phoneNumber ?? "";
       }
 
-      // If no token found by exact tokenNumber, check if there is an existing record
-      // for the same vehicle (and phone) that is currently NOT active (used/cooldown or expired).
-      // Requirement: "When again paste same number and vehicle number token sms need to update existing if already are not active"
+      // If no token found by exact tokenNumber, match by vehicleNumber!
+      // In FSM, each vehicle has one record. If a vehicle already exists in the system,
+      // pasting a new token SMS for it updates that vehicle's existing record with the new token number.
       if (!existing && p.vehicleNumber) {
         const vehicleRegex = new RegExp(
           `^${p.vehicleNumber.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`,
@@ -70,11 +69,7 @@ export async function POST(req: NextRequest) {
         }
 
         if (candidate) {
-          const statusInfo = getStatus(candidate);
-          const isNotActive = statusInfo.status !== "available" || candidate.lastUsedAt != null;
-          if (isNotActive) {
-            existing = candidate;
-          }
+          existing = candidate;
         }
       }
 
@@ -83,7 +78,7 @@ export async function POST(req: NextRequest) {
           ...p,
           phoneNumber: existing?.phoneNumber || phone,
           action: existing ? "update" : "create",
-          isInactiveRenewal: existing && existing.tokenNumber !== p.tokenNumber,
+          isRenewal: existing && existing.tokenNumber !== p.tokenNumber,
         });
         continue;
       }
@@ -93,10 +88,9 @@ export async function POST(req: NextRequest) {
         if (existing.tokenNumber !== p.tokenNumber) {
           const duplicate = await Token.findOne({ tokenNumber: p.tokenNumber });
           if (duplicate && String(duplicate._id) !== String(existing._id)) {
-            existing = duplicate;
-          } else {
-            existing.tokenNumber = p.tokenNumber;
+            await Token.deleteOne({ _id: duplicate._id });
           }
+          existing.tokenNumber = p.tokenNumber;
         }
 
         if (p.vehicleNumber) existing.vehicleNumber = p.vehicleNumber;
@@ -116,15 +110,25 @@ export async function POST(req: NextRequest) {
             });
           }
         } else {
-          // The imported SMS is an active allocation ("حاصل کر سکتے ہیں").
-          // If the token was previously inactive (marked used or expired), reactivate it!
-          const statusInfo = getStatus(existing);
-          if (statusInfo.status !== "available" || existing.lastUsedAt) {
-            existing.lastUsedAt = null;
-          }
+          // New active allocation token SMS:
+          // Reactivate it so it is available to use!
+          existing.lastUsedAt = null;
         }
 
         await existing.save();
+
+        // Automatically clean up any older duplicate records for this same vehicle
+        if (p.vehicleNumber) {
+          const vehicleRegex = new RegExp(
+            `^${p.vehicleNumber.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`,
+            "i"
+          );
+          await Token.deleteMany({
+            vehicleNumber: vehicleRegex,
+            _id: { $ne: existing._id },
+          });
+        }
+
         results.push({ action: "updated", token: serializeToken(existing) });
       } else {
         const isUsed = !!p.isAlreadyUsed;

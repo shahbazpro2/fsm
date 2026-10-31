@@ -1089,8 +1089,7 @@ function ImportModal({
           t.tokenNumber === p.tokenNumber ||
           (p.vehicleNumber &&
             t.vehicleNumber.toUpperCase() === p.vehicleNumber.toUpperCase() &&
-            (!phone.trim() || !t.phoneNumber || t.phoneNumber === phone.trim()) &&
-            t.status !== "available")
+            (!phone.trim() || !t.phoneNumber || t.phoneNumber === phone.trim()))
       );
       return { p, match };
     });
@@ -1205,7 +1204,7 @@ function ImportModal({
                       <span className="rounded bg-sky-500/15 border border-sky-500/30 px-1.5 py-0.5 text-[10px] font-medium text-sky-300">
                         {match.tokenNumber === p.tokenNumber
                           ? "Updates existing token"
-                          : `Updates inactive ${match.vehicleNumber}`}
+                          : `Updates existing vehicle (${match.vehicleNumber})`}
                       </span>
                     )}
                   </div>

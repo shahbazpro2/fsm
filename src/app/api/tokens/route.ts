@@ -34,6 +34,28 @@ export async function POST(req: NextRequest) {
     if (await Token.exists({ tokenNumber })) {
       return NextResponse.json({ error: "This token number already exists" }, { status: 409 });
     }
+
+    // If a record already exists for this vehicle, update that vehicle's record with the new token
+    const existingVehicle = await Token.findOne({
+      vehicleNumber: new RegExp(
+        `^${vehicleNumber.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`,
+        "i"
+      ),
+    });
+
+    if (existingVehicle) {
+      existingVehicle.tokenNumber = tokenNumber;
+      existingVehicle.vehicleNumber = vehicleNumber;
+      if (body.phoneNumber !== undefined) existingVehicle.phoneNumber = String(body.phoneNumber).trim();
+      if (body.ownerName !== undefined) existingVehicle.ownerName = String(body.ownerName).trim();
+      if (body.amount !== undefined) existingVehicle.amount = body.amount ? Number(body.amount) : null;
+      if (body.validUntil !== undefined) existingVehicle.validUntil = body.validUntil ? new Date(body.validUntil) : null;
+      if (body.notes !== undefined) existingVehicle.notes = String(body.notes);
+      existingVehicle.lastUsedAt = null;
+      await existingVehicle.save();
+      return NextResponse.json(serializeToken(existingVehicle), { status: 200 });
+    }
+
     const doc = await Token.create({
       tokenNumber,
       vehicleNumber,

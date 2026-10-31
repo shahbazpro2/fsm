@@ -13,6 +13,18 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized. Please login to view records." }, { status: 401 });
     }
     await dbConnect();
+
+    // Auto-heal: Restore any tokens mistakenly placed into cooldown upon import
+    await Token.updateMany(
+      {
+        "usageHistory.note": { $in: ["Imported as availed from SMS", "Marked used from SMS"] },
+        lastUsedAt: { $ne: null },
+      },
+      {
+        $set: { lastUsedAt: null, usageHistory: [] },
+      }
+    );
+
     const docs = await Token.find().sort({ vehicleNumber: 1, tokenNumber: 1 }).lean();
     return NextResponse.json(docs.map(serializeToken));
   } catch (err: unknown) {

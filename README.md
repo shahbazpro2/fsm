@@ -1,36 +1,27 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Fuel Token Manager
 
-## Getting Started
+Next.js 15 + MongoDB app to track government fuel-subsidy tokens.
 
-First, run the development server:
-
+## Run
 ```bash
+cp .env.example .env.local   # set MONGODB_URI (local or MongoDB Atlas)
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Token status rules
+| Status | Meaning |
+|---|---|
+| **Available** | Never used, or the 7-day cooldown has finished |
+| **Used (cooldown)** | Used less than 7 days ago – shows when it becomes valid again |
+| **Expired** | Validity from the latest SMS passed without being used |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Cooldown length: `NEXT_PUBLIC_COOLDOWN_DAYS` (default 7).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Importing SMS
+- **Paste SMS** button (floating on mobile) reads the clipboard → preview → save.
+- **Ctrl/⌘+V** anywhere on the page opens the importer.
+- When you return to the app, if clipboard permission is granted, a "Token SMS found in clipboard" banner appears.
+- **Android share sheet**: install the app (Chrome menu → *Install app / Add to Home screen*). Then in Messages, select the SMS → **Share** → *Fuel Tokens*. (Requires HTTPS when deployed.)
+- Multiple SMS can be pasted at once. Re-pasting an existing token updates its validity/amount.
+- Phone number is auto-filled from other tokens with the same vehicle number.

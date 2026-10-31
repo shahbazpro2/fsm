@@ -4,6 +4,29 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TokenDTO } from "@/lib/serialize";
 import { looksLikeTokenSms, parseTokenSms, type ParsedToken } from "@/lib/parseSms";
 import { COOLDOWN_DAYS } from "@/lib/status";
+import {
+  Fuel,
+  Plus,
+  Search,
+  X,
+  ClipboardPaste,
+  ClipboardCheck,
+  Copy,
+  Phone,
+  History,
+  Undo2,
+  Pencil,
+  Trash2,
+  Check,
+  Car,
+  Banknote,
+  Clock,
+  Hourglass,
+  CalendarX2,
+  Loader2,
+  ChevronRight,
+  type LucideIcon,
+} from "lucide-react";
 
 type Filter = "all" | "available" | "used" | "expired";
 
@@ -11,7 +34,12 @@ const TZ = "Asia/Karachi";
 const fmt = (iso: string | null) =>
   iso
     ? new Date(iso).toLocaleString("en-GB", {
-        timeZone: TZ, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: true,
+        timeZone: TZ,
+        day: "2-digit",
+        month: "short",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
       })
     : "—";
 
@@ -25,7 +53,6 @@ function timeLeft(iso: string | null) {
   return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
-/** Convert ISO → value for <input type="datetime-local"> in Pakistan time */
 function toLocalInput(iso: string | null) {
   if (!iso) return "";
   const d = new Date(new Date(iso).getTime() + 5 * 3600000);
@@ -35,19 +62,55 @@ function fromLocalInput(v: string) {
   return v ? new Date(v + ":00+05:00").toISOString() : null;
 }
 
-const STATUS_STYLE: Record<TokenDTO["status"], string> = {
-  available: "bg-emerald-100 text-emerald-800 ring-emerald-300",
-  used: "bg-amber-100 text-amber-800 ring-amber-300",
-  expired: "bg-rose-100 text-rose-800 ring-rose-300",
-};
-const STATUS_LABEL: Record<TokenDTO["status"], string> = {
-  available: "Available",
-  used: "Used (cooldown)",
-  expired: "Expired",
+const vibrate = (ms = 12) => {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    /* ignore */
+  }
 };
 
+const STATUS_CONFIG: Record<
+  TokenDTO["status"],
+  {
+    label: string;
+    badge: string;
+    accent: string;
+    icon: LucideIcon;
+  }
+> = {
+  available: {
+    label: "Available",
+    badge: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30",
+    accent: "bg-emerald-500",
+    icon: Check,
+  },
+  used: {
+    label: "Cooldown",
+    badge: "bg-amber-500/15 text-amber-400 border border-amber-500/30",
+    accent: "bg-amber-500",
+    icon: Hourglass,
+  },
+  expired: {
+    label: "Expired",
+    badge: "bg-rose-500/15 text-rose-400 border border-rose-500/30",
+    accent: "bg-rose-500",
+    icon: CalendarX2,
+  },
+};
+
+const TABS: { key: Filter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "available", label: "Available" },
+  { key: "used", label: "Cooldown" },
+  { key: "expired", label: "Expired" },
+];
+
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...init?.headers } });
+  const res = await fetch(url, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...init?.headers },
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
   return data as T;
@@ -63,12 +126,22 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   const [clipboardHint, setClipboardHint] = useState<string | null>(null);
   const [editing, setEditing] = useState<Partial<TokenDTO> | null>(null);
   const [historyFor, setHistoryFor] = useState<TokenDTO | null>(null);
+  const [detailFor, setDetailFor] = useState<TokenDTO | null>(null);
+  const [confirmState, setConfirmState] = useState<{
+    title: string;
+    message: string;
+    action: string;
+    danger?: boolean;
+    onYes: () => void;
+  } | null>(null);
   const [, setTick] = useState(0);
   const lastClip = useRef<string>("");
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const notify = useCallback((msg: string, err = false) => {
     setToast({ msg, err });
-    setTimeout(() => setToast(null), 3500);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3000);
   }, []);
 
   const load = useCallback(async () => {
@@ -87,12 +160,10 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
     return () => clearInterval(i);
   }, [load]);
 
-  // Clean ?text= from URL after share-target import opens
   useEffect(() => {
     if (sharedText) window.history.replaceState(null, "", "/");
   }, [sharedText]);
 
-  // Paste anywhere on the page (Ctrl/Cmd+V or long-press → Paste) opens importer
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
       const target = e.target as HTMLElement;
@@ -107,12 +178,13 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
     return () => window.removeEventListener("paste", onPaste);
   }, []);
 
-  // When returning to the app, silently check clipboard if permission was already granted
   useEffect(() => {
     const check = async () => {
       if (document.visibilityState !== "visible") return;
       try {
-        const perm = await navigator.permissions?.query({ name: "clipboard-read" as PermissionName });
+        const perm = await navigator.permissions?.query({
+          name: "clipboard-read" as PermissionName,
+        });
         if (perm?.state !== "granted") return;
         const text = await navigator.clipboard.readText();
         if (text && text !== lastClip.current && looksLikeTokenSms(text)) {
@@ -120,7 +192,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
           setClipboardHint(text);
         }
       } catch {
-        /* not supported – user can tap the Paste button */
+        /* ignore */
       }
     };
     check();
@@ -133,13 +205,14 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   }, []);
 
   const pasteFromClipboard = async () => {
+    vibrate();
     try {
       const text = await navigator.clipboard.readText();
       lastClip.current = text;
-      if (!text.trim()) return notify("Clipboard is empty", true);
-      setImportText(text);
+      setClipboardHint(null);
+      setImportText(text.trim() ? text : "");
     } catch {
-      setImportText(""); // open manual box – user can long-press → Paste
+      setImportText("");
     }
   };
 
@@ -151,242 +224,768 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
 
   const visible = useMemo(() => {
     const s = q.trim().toLowerCase().replace(/[\s-]/g, "");
-    return tokens.filter((t) => {
-      if (filter !== "all" && t.status !== filter) return false;
-      if (!s) return true;
-      return [t.tokenNumber, t.vehicleNumber, t.phoneNumber, t.ownerName]
-        .join(" ")
-        .toLowerCase()
-        .replace(/[\s-]/g, "")
-        .includes(s);
-    });
+    const order = { available: 0, used: 1, expired: 2 };
+    return tokens
+      .filter((t) => {
+        if (filter !== "all" && t.status !== filter) return false;
+        if (!s) return true;
+        return [t.tokenNumber, t.vehicleNumber, t.phoneNumber, t.ownerName]
+          .join(" ")
+          .toLowerCase()
+          .replace(/[\s-]/g, "")
+          .includes(s);
+      })
+      .sort((a, b) => order[a.status] - order[b.status] || a.vehicleNumber.localeCompare(b.vehicleNumber));
   }, [tokens, filter, q]);
 
-  const replace = (t: TokenDTO) => setTokens((prev) => prev.map((x) => (x._id === t._id ? t : x)));
+  const replace = (t: TokenDTO) => {
+    setTokens((prev) => prev.map((x) => (x._id === t._id ? t : x)));
+    setDetailFor((curr) => (curr?._id === t._id ? t : curr));
+  };
 
-  const markUsed = async (t: TokenDTO, force = false) => {
+  const doUse = async (t: TokenDTO, force: boolean) => {
     try {
       replace(await api<TokenDTO>(`/api/tokens/${t._id}/use`, { method: "POST", body: JSON.stringify({ force }) }));
-      notify(`Token ${t.tokenNumber} marked as used`);
+      vibrate(30);
+      notify(`${t.vehicleNumber} marked as used`);
     } catch (e) {
-      if (!force && confirm(`${(e as Error).message}\n\nMark as used anyway?`)) return markUsed(t, true);
-      if (force) notify((e as Error).message, true);
+      notify((e as Error).message, true);
     }
   };
 
-  const undoUse = async (t: TokenDTO) => {
-    if (!confirm(`Undo last usage of ${t.tokenNumber}?`)) return;
-    replace(await api<TokenDTO>(`/api/tokens/${t._id}/use`, { method: "DELETE" }));
-    notify("Last usage removed");
+  const markUsed = (t: TokenDTO) => {
+    if (t.status === "used") {
+      setConfirmState({
+        title: "Token in cooldown",
+        message: `Valid again on ${fmt(t.nextAvailableAt)}. Mark as used anyway?`,
+        action: "Mark Used",
+        onYes: () => doUse(t, true),
+      });
+    } else doUse(t, false);
   };
 
-  const remove = async (t: TokenDTO) => {
-    if (!confirm(`Delete token ${t.tokenNumber}? This cannot be undone.`)) return;
-    await api(`/api/tokens/${t._id}`, { method: "DELETE" });
-    setTokens((prev) => prev.filter((x) => x._id !== t._id));
-    notify("Token deleted");
-  };
+  const undoUse = (t: TokenDTO) =>
+    setConfirmState({
+      title: "Undo last use?",
+      message: `Removes the latest usage record for ${t.vehicleNumber}.`,
+      action: "Undo Use",
+      onYes: async () => {
+        replace(await api<TokenDTO>(`/api/tokens/${t._id}/use`, { method: "DELETE" }));
+        notify("Last usage undone");
+      },
+    });
+
+  const remove = (t: TokenDTO) =>
+    setConfirmState({
+      title: "Delete Token?",
+      message: `Token for vehicle ${t.vehicleNumber} will be permanently removed.`,
+      action: "Delete",
+      danger: true,
+      onYes: async () => {
+        await api(`/api/tokens/${t._id}`, { method: "DELETE" });
+        setTokens((prev) => prev.filter((x) => x._id !== t._id));
+        setDetailFor((curr) => (curr?._id === t._id ? null : curr));
+        notify("Token deleted");
+      },
+    });
 
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text).catch(() => {});
-    notify(`Copied ${text}`);
+    vibrate();
+    notify(`Copied: ${text}`);
   };
 
   return (
-    <div className="mx-auto max-w-5xl px-4 pb-32 pt-6">
-      <header className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">⛽ Fuel Token Manager</h1>
-          <p className="text-sm text-slate-500">
-            Tokens become valid again {COOLDOWN_DAYS} days after use
-          </p>
+    <div className="relative min-h-dvh bg-[#090d16] text-slate-100">
+      {/* Top Header */}
+      <header className="pt-safe sticky top-0 z-20 border-b border-slate-800 bg-[#090d16]">
+        <div className="mx-auto flex max-w-lg items-center justify-between px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500 text-slate-950">
+              <Fuel className="h-5 w-5" strokeWidth={2.2} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm font-bold text-white tracking-tight">Fuel Token Manager</h1>
+                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400">
+                  {COOLDOWN_DAYS}d Cooldown
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">Government Fuel Relief Tokens</p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setEditing({})}
+            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-200 transition hover:bg-slate-700 hover:text-white active:scale-95"
+            aria-label="Add manually"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => setEditing({})} className="btn-secondary">+ Add manually</button>
-          <button onClick={pasteFromClipboard} className="btn-primary">📋 Paste SMS</button>
+
+        {/* Filter Tabs */}
+        <div className="mx-auto max-w-lg px-4 pb-2.5">
+          <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+            {TABS.map((tab) => {
+              const active = filter === tab.key;
+              const count = counts[tab.key];
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => {
+                    setFilter(tab.key);
+                    vibrate(8);
+                  }}
+                  className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    active
+                      ? "bg-white text-slate-950"
+                      : "border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span
+                    className={`rounded px-1.5 py-0.2 text-[10px] font-mono ${
+                      active ? "bg-slate-200 text-slate-950" : "bg-slate-800 text-slate-400"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </header>
 
-      {clipboardHint && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
-          <div className="min-w-0 text-sm">
-            <p className="font-semibold text-indigo-900">Token SMS found in clipboard</p>
-            <p dir="rtl" className="truncate text-indigo-700">{clipboardHint}</p>
-          </div>
-          <div className="flex shrink-0 gap-2">
-            <button className="btn-primary" onClick={() => { setImportText(clipboardHint); setClipboardHint(null); }}>
-              Import
+      {/* Main Content Area */}
+      <main className="mx-auto max-w-lg px-4 pb-36 pt-3">
+        {/* Search Bar */}
+        <div className="relative mb-3">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search vehicle or phone..."
+            inputMode="search"
+            className="input pl-9 pr-9"
+          />
+          {q && (
+            <button
+              onClick={() => setQ("")}
+              aria-label="Clear search"
+              className="absolute right-3 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
+            >
+              <X className="h-3 w-3" />
             </button>
-            <button className="btn-ghost" onClick={() => setClipboardHint(null)}>✕</button>
-          </div>
-        </div>
-      )}
-
-      {/* Stats */}
-      <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {(["all", "available", "used", "expired"] as Filter[]).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`rounded-xl border p-3 text-left transition ${
-              filter === f ? "border-indigo-500 bg-white shadow ring-2 ring-indigo-200" : "border-slate-200 bg-white hover:border-slate-300"
-            }`}
-          >
-            <div className="text-xs uppercase tracking-wide text-slate-500">
-              {f === "all" ? "Total" : f === "used" ? "Used / Cooldown" : f}
-            </div>
-            <div className={`text-2xl font-bold ${
-              f === "available" ? "text-emerald-600" : f === "used" ? "text-amber-600" : f === "expired" ? "text-rose-600" : "text-slate-900"
-            }`}>
-              {counts[f]}
-            </div>
-          </button>
-        ))}
-      </div>
-
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Search token, vehicle number, phone…"
-        className="input mb-4"
-      />
-
-      {loading ? (
-        <p className="py-10 text-center text-slate-500">Loading…</p>
-      ) : visible.length === 0 ? (
-        <div className="rounded-xl border-2 border-dashed border-slate-300 bg-white p-10 text-center text-slate-500">
-          {tokens.length === 0 ? (
-            <>
-              <p className="mb-2 text-lg">No tokens yet</p>
-              <p className="text-sm">Copy a token SMS and tap <b>Paste SMS</b>, or press Ctrl/⌘+V anywhere here.</p>
-            </>
-          ) : (
-            "No tokens match this filter"
           )}
         </div>
-      ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {visible.map((t) => (
-            <div key={t._id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-2 flex items-start justify-between gap-2">
-                <button onClick={() => copy(t.tokenNumber)} title="Copy token number"
-                  className="font-mono text-lg font-bold tracking-wider text-slate-900 hover:text-indigo-600">
-                  {t.tokenNumber}
-                </button>
-                <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ${STATUS_STYLE[t.status]}`}>
-                  {STATUS_LABEL[t.status]}
-                </span>
-              </div>
 
-              <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
-                <dt className="text-slate-500">Vehicle</dt>
-                <dd className="font-semibold text-slate-800">{t.vehicleNumber}</dd>
-                <dt className="text-slate-500">Phone</dt>
-                <dd className="text-slate-800">
-                  {t.phoneNumber ? <a href={`tel:${t.phoneNumber}`} className="hover:underline">{t.phoneNumber}</a> : "—"}
-                  {t.ownerName && <span className="text-slate-500"> · {t.ownerName}</span>}
-                </dd>
-                <dt className="text-slate-500">Amount</dt>
-                <dd className="text-slate-800">{t.amount != null ? `Rs ${t.amount}` : "—"}</dd>
-                <dt className="text-slate-500">Valid until</dt>
-                <dd className="text-slate-800">{fmt(t.validUntil)}</dd>
-                <dt className="text-slate-500">Last used</dt>
-                <dd className="text-slate-800">{fmt(t.lastUsedAt)}</dd>
-                {t.status === "used" && (
-                  <>
-                    <dt className="text-slate-500">Valid again</dt>
-                    <dd className="font-semibold text-amber-700">
-                      {fmt(t.nextAvailableAt)} <span className="font-normal">({timeLeft(t.nextAvailableAt)})</span>
-                    </dd>
-                  </>
-                )}
-                {t.status === "available" && t.validUntil && new Date(t.validUntil).getTime() > Date.now() && (
-                  <>
-                    <dt className="text-slate-500">Expires in</dt>
-                    <dd className="font-semibold text-emerald-700">{timeLeft(t.validUntil)}</dd>
-                  </>
-                )}
-              </dl>
-
-              <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                {t.status !== "used" ? (
-                  <button className="btn-success" onClick={() => markUsed(t)}>✓ Mark used</button>
-                ) : (
-                  <button className="btn-secondary" onClick={() => undoUse(t)}>↶ Undo use</button>
-                )}
-                <button className="btn-ghost" onClick={() => setHistoryFor(t)}>
-                  History ({t.usageHistory.length})
-                </button>
-                <button className="btn-ghost" onClick={() => setEditing(t)}>Edit</button>
-                <button className="btn-ghost text-rose-600" onClick={() => remove(t)}>Delete</button>
-              </div>
+        {/* Clipboard Snippet Detection Banner */}
+        {clipboardHint && (
+          <div className="animate-fade mb-3 rounded-xl border border-slate-700 bg-slate-900 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+              <ClipboardCheck className="h-4 w-4" />
+              <span>Token detected in clipboard</span>
             </div>
-          ))}
+            <p dir="rtl" className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-300">
+              {clipboardHint}
+            </p>
+            <div className="mt-2.5 flex gap-2">
+              <button
+                className="flex-1 rounded-lg bg-emerald-500 py-1.5 text-xs font-bold text-slate-950 transition hover:bg-emerald-400 active:scale-98"
+                onClick={() => {
+                  setImportText(clipboardHint);
+                  setClipboardHint(null);
+                }}
+              >
+                Import Token
+              </button>
+              <button
+                className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white"
+                onClick={() => setClipboardHint(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tokens List */}
+        {loading ? (
+          <div className="space-y-2">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="h-20 animate-pulse rounded-xl border border-slate-800 bg-slate-900"
+              />
+            ))}
+          </div>
+        ) : visible.length === 0 ? (
+          <div className="mt-12 rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-800 text-slate-400">
+              <Fuel className="h-6 w-6" />
+            </div>
+            <h3 className="text-sm font-semibold text-slate-200">
+              {tokens.length === 0 ? "No tokens yet" : "No matching tokens"}
+            </h3>
+            <p className="mt-1 text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+              {tokens.length === 0
+                ? "Copy a token SMS and tap Paste SMS below to auto-import."
+                : "Try a different search or filter tab."}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {visible.map((t) => (
+              <TokenListItem
+                key={t._id}
+                t={t}
+                onSelect={() => setDetailFor(t)}
+                onUse={() => markUsed(t)}
+                onUndo={() => undoUse(t)}
+              />
+            ))}
+          </div>
+        )}
+      </main>
+
+      {/* Floating Bottom Action Bar */}
+      <div className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-slate-800 bg-[#090d16] p-3">
+        <div className="mx-auto max-w-lg">
+          <button
+            onClick={pasteFromClipboard}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-950 transition-colors hover:bg-slate-100 active:scale-[0.98]"
+          >
+            <ClipboardPaste className="h-4 w-4 text-slate-900" />
+            <span>Paste SMS from Clipboard</span>
+          </button>
         </div>
+      </div>
+
+      {/* Full Detail Modal */}
+      {detailFor && (
+        <DetailModal
+          token={detailFor}
+          onClose={() => setDetailFor(null)}
+          onUse={() => markUsed(detailFor)}
+          onUndo={() => undoUse(detailFor)}
+          onCopy={() => copy(detailFor.tokenNumber)}
+          onEdit={() => {
+            const t = detailFor;
+            setDetailFor(null);
+            setEditing(t);
+          }}
+          onDelete={() => {
+            const t = detailFor;
+            setDetailFor(null);
+            remove(t);
+          }}
+          onHistory={() => {
+            const t = detailFor;
+            setDetailFor(null);
+            setHistoryFor(t);
+          }}
+        />
       )}
 
-      {/* Floating paste button for mobile */}
-      <button
-        onClick={pasteFromClipboard}
-        className="fixed bottom-6 right-6 z-30 flex items-center gap-2 rounded-full bg-indigo-600 px-5 py-4 font-semibold text-white shadow-lg hover:bg-indigo-700 sm:hidden"
-      >
-        📋 Paste SMS
-      </button>
-
+      {/* SMS Import Modal */}
       {importText !== null && (
         <ImportModal
           initial={importText}
           onClose={() => setImportText(null)}
-          onDone={(msg) => { setImportText(null); notify(msg); load(); }}
+          onDone={(msg) => {
+            setImportText(null);
+            vibrate(30);
+            notify(msg);
+            load();
+          }}
           onError={(m) => notify(m, true)}
         />
       )}
 
+      {/* Edit / Add Modal */}
       {editing && (
         <EditModal
           token={editing}
           onClose={() => setEditing(null)}
           onSaved={(t, isNew) => {
             setEditing(null);
-            if (isNew) setTokens((p) => [...p, t]); else replace(t);
-            notify(isNew ? "Token added" : "Token updated");
+            if (isNew) setTokens((p) => [...p, t]);
+            else replace(t);
+            notify(isNew ? "Token created" : "Token updated");
           }}
           onError={(m) => notify(m, true)}
         />
       )}
 
+      {/* History Modal */}
       {historyFor && <HistoryModal token={historyFor} onClose={() => setHistoryFor(null)} />}
 
+      {/* Confirmation Modal */}
+      {confirmState && (
+        <ModalSheet title={confirmState.title} onClose={() => setConfirmState(null)}>
+          <p className="mb-5 text-sm text-slate-300 leading-relaxed">{confirmState.message}</p>
+          <div className="grid grid-cols-2 gap-2.5">
+            <button
+              className="h-11 rounded-xl border border-slate-700 bg-slate-800 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700"
+              onClick={() => setConfirmState(null)}
+            >
+              Cancel
+            </button>
+            <button
+              className={`h-11 rounded-xl text-sm font-bold text-white transition active:scale-98 ${
+                confirmState.danger
+                  ? "bg-rose-600 hover:bg-rose-500 active:bg-rose-700"
+                  : "bg-emerald-500 text-slate-950 hover:bg-emerald-400"
+              }`}
+              onClick={() => {
+                confirmState.onYes();
+                setConfirmState(null);
+              }}
+            >
+              {confirmState.action}
+            </button>
+          </div>
+        </ModalSheet>
+      )}
+
+      {/* Notification Toast */}
       {toast && (
-        <div className={`fixed bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-lg px-4 py-2 text-sm text-white shadow-lg sm:bottom-6 ${
-          toast.err ? "bg-rose-600" : "bg-slate-900"
-        }`}>
-          {toast.msg}
+        <div
+          className={`animate-toast fixed left-1/2 top-[calc(env(safe-area-inset-top)+1rem)] z-[60] flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold shadow-xl ${
+            toast.err
+              ? "border border-rose-500/40 bg-rose-950 text-rose-200"
+              : "border border-slate-700 bg-slate-900 text-white"
+          }`}
+        >
+          {toast.err ? <X className="h-4 w-4 text-rose-400 shrink-0" /> : <Check className="h-4 w-4 text-emerald-400 shrink-0" />}
+          <span>{toast.msg}</span>
         </div>
       )}
     </div>
   );
 }
 
-/* ---------------- Modals ---------------- */
+/* ---------------- List Item (Just Phone & Vehicle) ---------------- */
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function TokenListItem({
+  t,
+  onSelect,
+  onUse,
+  onUndo,
+}: {
+  t: TokenDTO;
+  onSelect: () => void;
+  onUse: () => void;
+  onUndo: () => void;
+}) {
+  const conf = STATUS_CONFIG[t.status];
+  const StatusIcon = conf.icon;
+
   return (
-    <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40 sm:items-center" onClick={onClose}>
-      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold">{title}</h2>
-          <button onClick={onClose} className="btn-ghost">✕</button>
+    <div
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className="group relative flex w-full flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/90 p-3.5 transition-colors hover:border-slate-700 hover:bg-slate-850 active:bg-slate-800 cursor-pointer sm:flex-row sm:items-center sm:justify-between"
+    >
+      {/* Left indicator bar */}
+      <span
+        className={`absolute inset-y-3 left-0 w-1 rounded-r ${conf.accent}`}
+      />
+
+      {/* Vehicle and Phone */}
+      <div className="min-w-0 flex-1 pl-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1.5 font-mono text-base font-bold tracking-wider text-white break-all">
+            <Car className="h-4 w-4 text-slate-400 shrink-0" />
+            <span>{t.vehicleNumber}</span>
+          </span>
+          <span
+            className={`inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold ${conf.badge}`}
+          >
+            <StatusIcon className="h-3 w-3" />
+            {conf.label}
+          </span>
         </div>
-        {children}
+
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+          <Phone className="h-3 w-3 text-slate-500 shrink-0" />
+          {t.phoneNumber ? (
+            <span className="font-mono text-slate-300 break-all">{t.phoneNumber}</span>
+          ) : (
+            <span className="italic text-slate-500">No phone assigned</span>
+          )}
+          {t.ownerName && <span className="text-slate-500">· {t.ownerName}</span>}
+        </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-slate-800/80 pt-2.5 pl-2 sm:border-0 sm:pt-0 sm:pl-0 sm:justify-end">
+        {t.status === "used" ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onUndo();
+            }}
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 text-xs font-semibold text-slate-200 transition hover:bg-slate-750 hover:text-white active:scale-95"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+            <span>Undo</span>
+          </button>
+        ) : (
+          /* High-contrast attractive solid Use button */
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onUse();
+            }}
+            className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 text-xs font-bold text-slate-950 shadow-sm transition hover:bg-emerald-400 active:scale-95"
+          >
+            <Check className="h-3.5 w-3.5" strokeWidth={3} />
+            <span>Use</span>
+          </button>
+        )}
+
+        <div className="flex h-8 items-center gap-0.5 text-xs font-medium text-slate-500 group-hover:text-slate-300 transition-colors">
+          <span className="text-[11px]">Details</span>
+          <ChevronRight className="h-3.5 w-3.5" />
+        </div>
       </div>
     </div>
   );
 }
 
-function ImportModal({ initial, onClose, onDone, onError }: {
-  initial: string; onClose: () => void; onDone: (msg: string) => void; onError: (m: string) => void;
+/* ---------------- Modal Sheet Container (Sticky Header & Close) ---------------- */
+
+function ModalSheet({
+  title,
+  subtitle,
+  onClose,
+  children,
+  footer,
+}: {
+  title: string;
+  subtitle?: string;
+  onClose: () => void;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="animate-fade fixed inset-0 z-50 flex items-end justify-center bg-black/80 sm:items-center p-0 sm:p-4"
+      onClick={onClose}
+    >
+      <div
+        className="animate-sheet relative flex max-h-[92dvh] w-full max-w-lg flex-col rounded-t-2xl border border-slate-800 bg-[#0f172a] shadow-2xl sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Drag pill for mobile */}
+        <div className="flex justify-center pt-2.5 pb-1 sm:hidden">
+          <span className="h-1 w-10 rounded-full bg-slate-700" />
+        </div>
+
+        {/* Sticky Header with Close button */}
+        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5">
+          <div className="min-w-0 pr-2">
+            <h2 className="truncate text-base font-bold text-white tracking-tight">{title}</h2>
+            {subtitle && <p className="truncate text-xs text-slate-400 mt-0.5">{subtitle}</p>}
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-400 hover:text-white active:scale-95 transition-colors"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Scrollable Body */}
+        <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-4 space-y-4 no-scrollbar">
+          {children}
+        </div>
+
+        {/* Optional Sticky Footer */}
+        {footer && (
+          <div className="pb-safe border-t border-slate-800 bg-[#0f172a] px-5 pt-3">
+            {footer}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Detail Modal View ---------------- */
+
+function DetailModal({
+  token,
+  onClose,
+  onUse,
+  onUndo,
+  onCopy,
+  onEdit,
+  onDelete,
+  onHistory,
+}: {
+  token: TokenDTO;
+  onClose: () => void;
+  onUse: () => void;
+  onUndo: () => void;
+  onCopy: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onHistory: () => void;
+}) {
+  const conf = STATUS_CONFIG[token.status];
+  const StatusIcon = conf.icon;
+  const validFuture = token.validUntil && new Date(token.validUntil).getTime() > Date.now();
+
+  return (
+    <ModalSheet
+      title={token.vehicleNumber}
+      subtitle={token.phoneNumber ? `Phone: ${token.phoneNumber}` : "Token Information"}
+      onClose={onClose}
+      footer={
+        <div className="flex gap-2">
+          {token.status === "used" ? (
+            <button
+              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 text-sm font-bold text-slate-200 transition hover:bg-slate-750 active:scale-98"
+              onClick={onUndo}
+            >
+              <Undo2 className="h-4 w-4" />
+              <span>Undo Last Use</span>
+            </button>
+          ) : (
+            <button
+              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-500 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 active:scale-98"
+              onClick={onUse}
+            >
+              <Check className="h-4 w-4" strokeWidth={2.5} />
+              <span>Mark as Used</span>
+            </button>
+          )}
+
+          <button
+            className="flex h-11 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 px-4 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700 transition-colors"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+      }
+    >
+      {/* Token Number Card */}
+      <div className="rounded-xl border border-slate-700 bg-slate-900 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+              Government Token Number
+            </div>
+            <div className="font-mono text-xl font-bold tracking-wider text-white mt-0.5">
+              {token.tokenNumber}
+            </div>
+          </div>
+          <button
+            onClick={onCopy}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:text-white active:scale-95 transition-colors"
+          >
+            <Copy className="h-3.5 w-3.5" />
+            <span>Copy</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Status & Subsidized Amount Cards */}
+      <div className="grid grid-cols-2 gap-2.5">
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-3.5">
+          <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <Banknote className="h-3.5 w-3.5 text-emerald-400" />
+            <span>Relief Value</span>
+          </div>
+          <div className="mt-1 text-xl font-bold text-white">
+            {token.amount != null ? `Rs ${token.amount}` : "—"}
+          </div>
+          <div className="mt-0.5 text-[11px] text-slate-400">Gov fuel subsidy</div>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-3.5">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Token Status
+          </div>
+          <div className="mt-1">
+            <span
+              className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-bold ${conf.badge}`}
+            >
+              <StatusIcon className="h-3 w-3" />
+              {conf.label}
+            </span>
+          </div>
+          <div className="mt-1 text-[11px] text-slate-400 truncate">
+            {token.status === "used"
+              ? `Renew: ${fmt(token.nextAvailableAt)}`
+              : token.status === "available" && validFuture
+              ? `Expires: ${fmt(token.validUntil)}`
+              : "Ready to use"}
+          </div>
+        </div>
+      </div>
+
+      {/* Timing Details */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900 p-3.5 space-y-2 text-xs">
+        {token.status === "used" && (
+          <div className="flex items-center justify-between text-amber-400">
+            <span className="flex items-center gap-1.5 text-slate-400">
+              <Hourglass className="h-3.5 w-3.5 text-amber-400" />
+              <span>Renew in</span>
+            </span>
+            <span className="font-bold">{timeLeft(token.nextAvailableAt)}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between text-slate-300">
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <Clock className="h-3.5 w-3.5" />
+            <span>SMS Validity</span>
+          </span>
+          <span className="font-mono">{fmt(token.validUntil)}</span>
+        </div>
+
+        <div className="flex items-center justify-between text-slate-300">
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <History className="h-3.5 w-3.5" />
+            <span>Last Used Date</span>
+          </span>
+          <span className="font-mono">{fmt(token.lastUsedAt)}</span>
+        </div>
+      </div>
+
+      {/* Contact & Owner Section */}
+      <div className="rounded-xl border border-slate-800 bg-slate-900 p-3.5 space-y-2.5 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <Car className="h-3.5 w-3.5 text-slate-500" />
+            <span>Vehicle Number</span>
+          </span>
+          <span className="font-mono font-bold text-white">{token.vehicleNumber}</span>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <span className="flex items-center gap-1.5 text-slate-400">
+            <Phone className="h-3.5 w-3.5 text-slate-500" />
+            <span>Phone Number</span>
+          </span>
+          {token.phoneNumber ? (
+            <a
+              href={`tel:${token.phoneNumber}`}
+              className="font-mono font-semibold text-emerald-400 underline underline-offset-2 hover:text-emerald-300"
+            >
+              {token.phoneNumber}
+            </a>
+          ) : (
+            <span className="text-slate-500 italic">Not set</span>
+          )}
+        </div>
+
+        {token.ownerName && (
+          <div className="flex items-center justify-between">
+            <span className="text-slate-400">Owner Name</span>
+            <span className="font-medium text-white">{token.ownerName}</span>
+          </div>
+        )}
+
+        {token.notes && (
+          <div className="border-t border-slate-800 pt-2 text-slate-400">
+            <span className="text-slate-500">Note: </span>
+            {token.notes}
+          </div>
+        )}
+      </div>
+
+      {/* Quick Action Rows */}
+      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+        <button
+          onClick={onHistory}
+          className="flex w-full items-center justify-between border-b border-slate-800 p-3 text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <History className="h-4 w-4 text-slate-400" />
+            <span>Usage History ({token.usageHistory.length})</span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-slate-500" />
+        </button>
+
+        <button
+          onClick={onEdit}
+          className="flex w-full items-center justify-between border-b border-slate-800 p-3 text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <Pencil className="h-4 w-4 text-slate-400" />
+            <span>Edit Information</span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-slate-500" />
+        </button>
+
+        <button
+          onClick={onDelete}
+          className="flex w-full items-center justify-between p-3 text-xs font-semibold text-rose-400 hover:bg-rose-950/30 transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <Trash2 className="h-4 w-4 text-rose-500" />
+            <span>Delete Token</span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-slate-500" />
+        </button>
+      </div>
+
+      {/* Raw SMS Box */}
+      {token.lastSms && (
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+            Original SMS Notification
+          </div>
+          <div
+            dir="rtl"
+            className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs leading-relaxed text-slate-300"
+          >
+            {token.lastSms}
+          </div>
+        </div>
+      )}
+    </ModalSheet>
+  );
+}
+
+/* ---------------- Import Sheet ---------------- */
+
+function ImportModal({
+  initial,
+  onClose,
+  onDone,
+  onError,
+}: {
+  initial: string;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+  onError: (m: string) => void;
 }) {
   const [text, setText] = useState(initial);
   const [phone, setPhone] = useState("");
@@ -402,7 +1001,7 @@ function ImportModal({ initial, onClose, onDone, onError }: {
       });
       const c = results.filter((r) => r.action === "created").length;
       const u = results.length - c;
-      onDone(`${c} new token(s) added, ${u} updated`);
+      onDone(c && u ? `${c} added, ${u} updated` : c ? `${c} token(s) added` : `${u} token(s) updated`);
     } catch (e) {
       onError((e as Error).message);
     } finally {
@@ -411,50 +1010,111 @@ function ImportModal({ initial, onClose, onDone, onError }: {
   };
 
   return (
-    <Modal title="Import token SMS" onClose={onClose}>
-      <textarea
-        dir="rtl"
-        autoFocus={!initial}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="یہاں ٹوکن میسج پیسٹ کریں — long-press and Paste the SMS here (multiple messages OK)"
-        className="input h-32 font-[inherit] leading-relaxed"
-      />
-      <label className="mt-3 block text-sm font-medium text-slate-700">
-        Phone number <span className="font-normal text-slate-400">(optional – auto-filled from same vehicle)</span>
-      </label>
-      <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="03XXXXXXXXX" className="input mt-1" />
+    <ModalSheet
+      title="Import Fuel Token"
+      subtitle="Paste SMS message to auto-extract details"
+      onClose={onClose}
+      footer={
+        <div className="flex gap-2">
+          <button
+            className="h-11 flex-1 rounded-xl bg-emerald-500 text-sm font-bold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 active:scale-98 transition-colors"
+            disabled={!parsed.length || busy}
+            onClick={submit}
+          >
+            {busy ? (
+              <span className="flex items-center justify-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Saving...</span>
+              </span>
+            ) : parsed.length ? (
+              `Save ${parsed.length} Token${parsed.length > 1 ? "s" : ""}`
+            ) : (
+              "Save Token"
+            )}
+          </button>
+          <button
+            className="h-11 rounded-xl border border-slate-700 bg-slate-800 px-4 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+        </div>
+      }
+    >
+      <div>
+        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+          SMS Message (Urdu / English)
+        </label>
+        <textarea
+          dir="rtl"
+          autoFocus={!initial}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="یہاں ٹوکن میسج پیسٹ کریں..."
+          className="input h-28 resize-none text-sm leading-relaxed"
+        />
+      </div>
 
-      <div className="mt-4">
-        <p className="mb-2 text-sm font-medium text-slate-700">Detected ({parsed.length})</p>
+      <div>
+        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+          Phone Number <span className="text-slate-500 font-normal">(optional)</span>
+        </label>
+        <input
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          inputMode="tel"
+          placeholder="03XXXXXXXXX"
+          className="input text-sm"
+        />
+      </div>
+
+      <div>
+        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+          Detected Tokens ({parsed.length})
+        </div>
+
         {parsed.length === 0 ? (
-          <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500">No token detected yet.</p>
+          <div className="rounded-xl border border-dashed border-slate-800 bg-slate-900 p-4 text-center text-xs text-slate-500">
+            Paste your message above. Vehicle number, token ID, and relief amount will auto-populate.
+          </div>
         ) : (
-          <ul className="space-y-2">
+          <div className="space-y-2">
             {parsed.map((p) => (
-              <li key={p.tokenNumber} className="grid grid-cols-2 gap-1 rounded-lg bg-emerald-50 p-3 text-sm">
-                <span className="text-slate-500">Token</span><span className="font-mono font-bold">{p.tokenNumber}</span>
-                <span className="text-slate-500">Vehicle</span><span className="font-semibold">{p.vehicleNumber || "—"}</span>
-                <span className="text-slate-500">Amount</span><span>{p.amount != null ? `Rs ${p.amount}` : "—"}</span>
-                <span className="text-slate-500">Valid until</span><span>{fmt(p.validUntil)}</span>
-              </li>
+              <div
+                key={p.tokenNumber}
+                className="rounded-xl border border-emerald-500/30 bg-emerald-950/20 p-3 text-xs"
+              >
+                <div className="flex items-center justify-between text-slate-200">
+                  <span className="font-mono font-bold text-sm text-emerald-400">
+                    {p.tokenNumber}
+                  </span>
+                  <span className="font-semibold">{p.amount != null ? `Rs ${p.amount}` : ""}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between text-slate-400">
+                  <span className="font-mono">{p.vehicleNumber || "Unknown Vehicle"}</span>
+                  <span>{fmt(p.validUntil)}</span>
+                </div>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </div>
-
-      <div className="mt-5 flex justify-end gap-2">
-        <button className="btn-secondary" onClick={onClose}>Cancel</button>
-        <button className="btn-primary" disabled={!parsed.length || busy} onClick={submit}>
-          {busy ? "Saving…" : `Save ${parsed.length || ""} token(s)`}
-        </button>
-      </div>
-    </Modal>
+    </ModalSheet>
   );
 }
 
-function EditModal({ token, onClose, onSaved, onError }: {
-  token: Partial<TokenDTO>; onClose: () => void; onSaved: (t: TokenDTO, isNew: boolean) => void; onError: (m: string) => void;
+/* ---------------- Edit / Add Modal ---------------- */
+
+function EditModal({
+  token,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  token: Partial<TokenDTO>;
+  onClose: () => void;
+  onSaved: (t: TokenDTO, isNew: boolean) => void;
+  onError: (m: string) => void;
 }) {
   const isNew = !token._id;
   const [f, setF] = useState({
@@ -466,8 +1126,10 @@ function EditModal({ token, onClose, onSaved, onError }: {
     validUntil: toLocalInput(token.validUntil ?? null),
     notes: token.notes ?? "",
   });
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setF({ ...f, [k]: e.target.value });
+
+  const set = (k: keyof typeof f) => (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+  ) => setF({ ...f, [k]: e.target.value });
 
   const save = async () => {
     try {
@@ -481,57 +1143,115 @@ function EditModal({ token, onClose, onSaved, onError }: {
     }
   };
 
-  const field = (label: string, k: keyof typeof f, props: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
-    <label className="block text-sm font-medium text-slate-700">
-      {label}
-      <input value={f[k]} onChange={set(k)} className="input mt-1" {...props} />
-    </label>
+  const field = (
+    label: string,
+    k: keyof typeof f,
+    props: React.InputHTMLAttributes<HTMLInputElement> = {}
+  ) => (
+    <div>
+      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+        {label}
+      </label>
+      <input value={f[k]} onChange={set(k)} className="input text-sm" {...props} />
+    </div>
   );
 
   return (
-    <Modal title={isNew ? "Add token" : "Edit token"} onClose={onClose}>
-      <div className="grid gap-3">
-        {field("Token number *", "tokenNumber", { inputMode: "numeric" })}
-        {field("Vehicle number *", "vehicleNumber", { placeholder: "ABC-12-3456" })}
-        {field("Phone number", "phoneNumber", { inputMode: "tel" })}
-        {field("Owner name", "ownerName")}
-        {field("Amount (Rs)", "amount", { inputMode: "numeric" })}
-        {field("Valid until (PKT)", "validUntil", { type: "datetime-local" })}
-        <label className="block text-sm font-medium text-slate-700">
-          Notes
-          <textarea value={f.notes} onChange={set("notes")} className="input mt-1 h-20" />
-        </label>
+    <ModalSheet
+      title={isNew ? "New Token Record" : "Edit Token"}
+      subtitle={isNew ? "Manually add a token" : f.vehicleNumber}
+      onClose={onClose}
+      footer={
+        <div className="flex gap-2">
+          <button
+            className="flex-1 h-11 rounded-xl bg-emerald-500 text-sm font-bold text-slate-950 hover:bg-emerald-400 active:scale-98 transition-colors"
+            onClick={save}
+          >
+            Save Token
+          </button>
+          <button
+            className="h-11 rounded-xl border border-slate-700 bg-slate-800 px-4 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        {field("Token Number *", "tokenNumber", { inputMode: "numeric", placeholder: "7541879333" })}
+        {field("Vehicle Number *", "vehicleNumber", {
+          placeholder: "NBK-11-2610",
+          autoCapitalize: "characters",
+        })}
+
+        <div className="grid grid-cols-2 gap-2.5">
+          {field("Phone", "phoneNumber", { inputMode: "tel", placeholder: "03001234567" })}
+          {field("Subsidy Amount (Rs)", "amount", { inputMode: "numeric", placeholder: "500" })}
+        </div>
+
+        {field("Registered Owner", "ownerName", { placeholder: "Optional name" })}
+        {field("Validity (PKT)", "validUntil", { type: "datetime-local" })}
+
+        <div>
+          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+            Notes
+          </label>
+          <textarea
+            value={f.notes}
+            onChange={set("notes")}
+            className="input text-sm h-18 resize-none"
+            placeholder="Add any reminders..."
+          />
+        </div>
       </div>
-      <div className="mt-5 flex justify-end gap-2">
-        <button className="btn-secondary" onClick={onClose}>Cancel</button>
-        <button className="btn-primary" onClick={save}>Save</button>
-      </div>
-    </Modal>
+    </ModalSheet>
   );
 }
 
+/* ---------------- Usage History Modal ---------------- */
+
 function HistoryModal({ token, onClose }: { token: TokenDTO; onClose: () => void }) {
   const list = [...token.usageHistory].sort((a, b) => +new Date(b.usedAt) - +new Date(a.usedAt));
+
   return (
-    <Modal title={`History · ${token.tokenNumber}`} onClose={onClose}>
+    <ModalSheet
+      title="Usage Records"
+      subtitle={`${token.vehicleNumber} · ${token.tokenNumber}`}
+      onClose={onClose}
+      footer={
+        <button
+          className="w-full h-11 rounded-xl border border-slate-700 bg-slate-800 text-sm font-semibold text-slate-200 hover:text-white active:bg-slate-700"
+          onClick={onClose}
+        >
+          Close History
+        </button>
+      }
+    >
       {list.length === 0 ? (
-        <p className="text-sm text-slate-500">Never used.</p>
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-xs text-slate-500">
+          No previous usages recorded for this token yet.
+        </div>
       ) : (
-        <ul className="divide-y divide-slate-100">
-          {list.map((u) => (
-            <li key={u._id} className="flex justify-between py-2 text-sm">
-              <span>{fmt(u.usedAt)}</span>
-              <span className="text-slate-600">{u.amount != null ? `Rs ${u.amount}` : ""}</span>
-            </li>
+        <div className="space-y-2">
+          {list.map((u, i) => (
+            <div
+              key={u._id}
+              className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs"
+            >
+              <div className="flex items-center gap-2">
+                <span className="flex h-5 w-5 items-center justify-center rounded bg-slate-800 font-mono text-[10px] text-slate-400">
+                  #{list.length - i}
+                </span>
+                <span className="font-mono text-slate-200">{fmt(u.usedAt)}</span>
+              </div>
+              <span className="font-semibold text-emerald-400">
+                {u.amount != null ? `Rs ${u.amount}` : "Used"}
+              </span>
+            </div>
           ))}
-        </ul>
-      )}
-      {token.lastSms && (
-        <div className="mt-4">
-          <p className="mb-1 text-sm font-medium text-slate-700">Last SMS</p>
-          <p dir="rtl" className="rounded-lg bg-slate-50 p-3 text-sm leading-relaxed">{token.lastSms}</p>
         </div>
       )}
-    </Modal>
+    </ModalSheet>
   );
 }

@@ -12,7 +12,12 @@ export const metadata: Metadata = {
   appleWebApp: { capable: true, title: "Fuel Tokens", statusBarStyle: "default" },
 };
 
-export const viewport: Viewport = { themeColor: "#4f46e5" };
+export const viewport: Viewport = {
+  themeColor: "#0b0f19",
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (

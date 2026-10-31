@@ -30,6 +30,7 @@ import {
   KeyRound,
   PlusCircle,
   FileText,
+  RefreshCw,
   type LucideIcon,
 } from "lucide-react";
 
@@ -153,6 +154,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   }, []);
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       setTokens(await api<TokenDTO[]>("/api/tokens"));
     } catch {
@@ -363,6 +365,16 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
             {isAuth ? (
               <>
                 <button
+                  onClick={() => load()}
+                  disabled={loading}
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-300 transition hover:bg-slate-700 hover:text-white active:scale-95 disabled:opacity-50"
+                  title="Refresh data"
+                  aria-label="Refresh data"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-emerald-400" : ""}`} />
+                </button>
+
+                <button
                   onClick={logout}
                   className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-2.5 text-xs font-semibold text-slate-300 transition hover:bg-slate-700 hover:text-white active:scale-95"
                   title="Logout"
@@ -430,7 +442,21 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
 
       {/* Main Content Area */}
       <main className="mx-auto max-w-lg px-4 pb-36 pt-3">
-        {!isAuth ? (
+        {loading && !tokens.length && isAuth ? (
+          /* INITIAL LOADING STATE FOR LOGGED IN USER */
+          <div className="space-y-3 pt-1">
+            <div className="flex items-center justify-between px-1 mb-1">
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+                <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+                <span>Loading token records...</span>
+              </div>
+              <span className="text-[11px] text-slate-500">Connecting to database</span>
+            </div>
+            {[0, 1, 2, 3].map((i) => (
+              <TokenCardSkeleton key={i} />
+            ))}
+          </div>
+        ) : !isAuth ? (
           /* LOCKED VIEW: Only show Add New Record options + Protected Notice */
           <div className="space-y-4 pt-2">
             {/* Clipboard Banner if token detected */}
@@ -568,12 +594,16 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
 
             {/* Tokens List */}
             {loading ? (
-              <div className="space-y-2">
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="h-20 animate-pulse rounded-xl border border-slate-800 bg-slate-900"
-                  />
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between px-1 mb-1">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-400">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
+                    <span>Loading token records...</span>
+                  </div>
+                  <span className="text-[11px] text-slate-500">Syncing with database</span>
+                </div>
+                {[0, 1, 2, 3].map((i) => (
+                  <TokenCardSkeleton key={i} />
                 ))}
               </div>
             ) : visible.length === 0 ? (
@@ -765,6 +795,39 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
           <span>{toast.msg}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---------------- Skeleton Loader Card ---------------- */
+
+function TokenCardSkeleton() {
+  return (
+    <div className="relative flex w-full flex-col gap-3 rounded-xl border border-slate-800/90 bg-slate-900/60 p-3.5 sm:flex-row sm:items-center sm:justify-between animate-pulse">
+      {/* Left indicator bar */}
+      <span className="absolute inset-y-3 left-0 w-1 rounded-r bg-slate-800" />
+
+      {/* Vehicle and Phone placeholders */}
+      <div className="min-w-0 flex-1 pl-2 space-y-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <div className="h-4 w-4 rounded bg-slate-800 shrink-0" />
+            <div className="h-5 w-28 rounded-md bg-slate-800" />
+          </div>
+          <div className="h-4 w-16 rounded bg-slate-800/80" />
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <div className="h-3 w-3 rounded bg-slate-800 shrink-0" />
+          <div className="h-3.5 w-32 rounded bg-slate-800/70" />
+        </div>
+      </div>
+
+      {/* Action Buttons & Details placeholder */}
+      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-800/60 pt-2.5 pl-2 sm:border-0 sm:pt-0 sm:pl-0 sm:justify-end">
+        <div className="h-9 w-16 rounded-lg bg-slate-800" />
+        <div className="h-4 w-12 rounded bg-slate-800/60" />
+      </div>
     </div>
   );
 }

@@ -1,0 +1,47 @@
+import { NextRequest, NextResponse } from "next/server";
+import { dbConnect } from "@/lib/mongodb";
+import { Token } from "@/models/Token";
+import { serializeToken } from "@/lib/serialize";
+import { getStatus } from "@/lib/status";
+
+type Ctx = { params: Promise<{ id: string }> };
+
+/** Mark token as used. Body: { usedAt?: ISO, amount?: number, note?: string, force?: boolean } */
+export async function POST(req: NextRequest, { params }: Ctx) {
+  await dbConnect();
+  const { id } = await params;
+  const body = await req.json().catch(() => ({}));
+  const doc = await Token.findById(id);
+  if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const { status, nextAvailableAt } = getStatus(doc);
+  if (status === "used" && !body.force) {
+    return NextResponse.json(
+      { error: `Token is in cooldown until ${new Date(nextAvailableAt!).toLocaleString("en-PK")}` },
+      { status: 409 }
+    );
+  }
+
+  const usedAt = body.usedAt ? new Date(body.usedAt) : new Date();
+  doc.usageHistory.push({ usedAt, amount: body.amount ?? doc.amount ?? null, note: body.note ?? "" });
+  if (!doc.lastUsedAt || usedAt > doc.lastUsedAt) doc.lastUsedAt = usedAt;
+  await doc.save();
+  return NextResponse.json(serializeToken(doc));
+}
+
+/** Undo the most recent usage */
+export async function DELETE(_req: NextRequest, { params }: Ctx) {
+  await dbConnect();
+  const { id } = await params;
+  const doc = await Token.findById(id);
+  if (!doc) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const sorted = [...doc.usageHistory].sort((a, b) => +new Date(b.usedAt) - +new Date(a.usedAt));
+  const latest = sorted[0];
+  if (latest) {
+    doc.usageHistory.pull(latest._id);
+    doc.lastUsedAt = sorted[1]?.usedAt ?? null;
+    await doc.save();
+  }
+  return NextResponse.json(serializeToken(doc));
+}

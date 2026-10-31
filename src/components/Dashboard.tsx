@@ -179,30 +179,36 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   }, []);
 
   useEffect(() => {
-    const check = async () => {
+    const checkClipboard = async () => {
       if (document.visibilityState !== "visible") return;
       try {
-        const perm = await navigator.permissions?.query({
-          name: "clipboard-read" as PermissionName,
-        });
-        if (perm?.state !== "granted") return;
-        const text = await navigator.clipboard.readText();
-        if (text && text !== lastClip.current && looksLikeTokenSms(text)) {
+        // Try reading clipboard directly (works seamlessly on HTTPS / installed PWA)
+        const text = await navigator.clipboard?.readText?.();
+        if (
+          text &&
+          text.trim() &&
+          text !== lastClip.current &&
+          looksLikeTokenSms(text)
+        ) {
           lastClip.current = text;
-          setClipboardHint(text);
+          vibrate(20);
+          // Auto-open the import popup immediately!
+          setImportText(text);
+          notify("Token detected from clipboard!");
         }
       } catch {
-        /* ignore */
+        // If browser prompts permission or blocks background read, user uses "Paste SMS" button
       }
     };
-    check();
-    window.addEventListener("focus", check);
-    document.addEventListener("visibilitychange", check);
+
+    checkClipboard();
+    window.addEventListener("focus", checkClipboard);
+    document.addEventListener("visibilitychange", checkClipboard);
     return () => {
-      window.removeEventListener("focus", check);
-      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", checkClipboard);
+      document.removeEventListener("visibilitychange", checkClipboard);
     };
-  }, []);
+  }, [notify]);
 
   const pasteFromClipboard = async () => {
     vibrate();

@@ -9,6 +9,12 @@ import { getCurrentUser, ensureSuperadminExists } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
+type PopulatedUser = {
+  _id?: mongoose.Types.ObjectId | string;
+  username?: string;
+  name?: string;
+};
+
 /**
  * Import one or more token SMS messages.
  * Body: { text: string, phoneNumber?: string, preview?: boolean, userId?: string }
@@ -16,7 +22,7 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     await dbConnect();
-    const admin = await ensureSuperadminExists();
+    await ensureSuperadminExists();
 
     const currentUser = await getCurrentUser(req);
 
@@ -30,13 +36,29 @@ export async function POST(req: NextRequest) {
     const { text, phoneNumber, preview, userId } = body || {};
 
     // Determine target user to assign tokens to:
-    // If a specific userId was selected, verify it exists.
-    let targetUserId = currentUser ? currentUser.userId : String(admin._id);
-    if (userId) {
-      const selectedUser = await User.findById(userId).lean();
-      if (selectedUser) {
-        targetUserId = String(selectedUser._id);
+    let targetUserId: string;
+
+    if (!currentUser) {
+      // Adding from public: userId MUST be explicitly specified and valid
+      if (!userId) {
+        return NextResponse.json(
+          { error: "Please select and confirm a user to assign this token to." },
+          { status: 400 }
+        );
       }
+      const selectedUser = await User.findById(userId).lean();
+      if (!selectedUser) {
+        return NextResponse.json(
+          { error: "Selected user does not exist. Please choose a valid user." },
+          { status: 400 }
+        );
+      }
+      targetUserId = String(selectedUser._id);
+    } else if (currentUser.role === "superadmin" && userId) {
+      const selectedUser = await User.findById(userId).lean();
+      targetUserId = selectedUser ? String(selectedUser._id) : currentUser.userId;
+    } else {
+      targetUserId = currentUser.userId;
     }
 
     if (!text || typeof text !== "string" || !text.trim()) {
@@ -53,6 +75,57 @@ export async function POST(req: NextRequest) {
 
     const results = [];
     for (const p of parsed) {
+      // 1. Check if tokenNumber already exists globally for ANOTHER user
+      const existingTokenGlobal = await Token.findOne({ tokenNumber: p.tokenNumber })
+        .populate("userId", "username name")
+        .lean();
+
+      if (existingTokenGlobal) {
+        const ownerDoc = existingTokenGlobal.userId as PopulatedUser | null;
+        const ownerId = ownerDoc?._id ? String(ownerDoc._id) : String(existingTokenGlobal.userId ?? "");
+        if (ownerId && ownerId !== String(targetUserId)) {
+          const ownerLabel = ownerDoc?.username
+            ? `@${ownerDoc.username}${ownerDoc.name ? ` (${ownerDoc.name})` : ""}`
+            : "another user";
+          return NextResponse.json(
+            {
+              error: `This token (${p.tokenNumber}) is assigned to that user: ${ownerLabel}. It cannot be added or assigned to a different user.`,
+            },
+            { status: 409 }
+          );
+        }
+      }
+
+      // 2. Check if vehicleNumber already belongs to ANOTHER user
+      if (p.vehicleNumber) {
+        const vehicleRegex = new RegExp(
+          `^${p.vehicleNumber.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`,
+          "i"
+        );
+        const existingVehicleOther = await Token.findOne({
+          vehicleNumber: vehicleRegex,
+          userId: { $nin: [null, new mongoose.Types.ObjectId(targetUserId)] },
+        })
+          .populate("userId", "username name")
+          .lean();
+
+        if (existingVehicleOther) {
+          const vOwner = existingVehicleOther.userId as PopulatedUser | null;
+          const vOwnerId = vOwner?._id ? String(vOwner._id) : String(existingVehicleOther.userId ?? "");
+          if (vOwnerId && vOwnerId !== String(targetUserId)) {
+            const vOwnerLabel = vOwner?.username
+              ? `@${vOwner.username}${vOwner.name ? ` (${vOwner.name})` : ""}`
+              : "another user";
+            return NextResponse.json(
+              {
+                error: `Vehicle ${p.vehicleNumber} is assigned to that user: ${vOwnerLabel}. This token belongs to that user.`,
+              },
+              { status: 409 }
+            );
+          }
+        }
+      }
+
       const scopeQuery: Record<string, unknown> = { userId: targetUserId };
 
       let existing = await Token.findOne({ tokenNumber: p.tokenNumber, ...scopeQuery });

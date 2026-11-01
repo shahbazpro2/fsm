@@ -36,6 +36,8 @@ import {
   RefreshCw,
   Users,
   Shield,
+  ShieldAlert,
+  AlertTriangle,
   User as UserIcon,
   Eye,
   EyeOff,
@@ -1342,7 +1344,37 @@ function DetailModal({
 
 /* ---------------- Import Sheet ---------------- */
 
-const LAST_IMPORT_USER_KEY = "fsm_last_import_user_id";
+const safeStorage = {
+  get: (key: string): string | null => {
+    try {
+      if (typeof window === "undefined") return null;
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set: (key: string, val: string) => {
+    try {
+      if (typeof window !== "undefined") {
+        localStorage.setItem(key, val);
+      }
+    } catch {}
+  },
+};
+
+// Storage key scoped specifically for each actor (different for each logged-in user vs public)
+const getActorStorageKey = (currentUser?: UserSession | null) => {
+  if (!currentUser?.userId) {
+    return "fsm_last_import_user_public";
+  }
+  return `fsm_last_import_user_${currentUser.userId}`;
+};
+
+// Storage key mapping vehicle numbers to their assigned user
+const getVehicleStorageKey = (vehicle: string) => {
+  const clean = vehicle.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return `fsm_vehicle_user_${clean}`;
+};
 
 function ImportModal({
   initial,
@@ -1359,17 +1391,63 @@ function ImportModal({
   onDone: (msg: string) => void;
   onError: (m: string) => void;
 }) {
+  const isPublic = !currentUser;
+  const isSuperadmin = currentUser?.role === "superadmin";
+  const canChooseUser = isPublic || isSuperadmin;
+
   const [text, setText] = useState(initial);
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmingUser, setConfirmingUser] = useState(false);
+  const [inlineError, setInlineError] = useState<string | null>(null);
   const [users, setUsers] = useState<{ id: string; username: string; name: string; role: string }[]>([]);
+
+  const parsed: ParsedToken[] = useMemo(() => parseTokenSms(text), [text]);
+  const primaryVehicle = parsed[0]?.vehicleNumber;
+
+  // Resolves the best user ID for this actor and vehicle from localStorage
+  const resolveTargetUserId = useCallback(
+    (availableUsers: { id: string }[], vehicle?: string) => {
+      if (!availableUsers.length) return "";
+      // Non-superadmin logged-in users are always bound to their own account
+      if (currentUser && !isSuperadmin) {
+        return currentUser.userId;
+      }
+
+      // 1. Check if vehicle has a specifically remembered user in localStorage
+      if (vehicle) {
+        const vehicleSaved = safeStorage.get(getVehicleStorageKey(vehicle));
+        if (vehicleSaved && availableUsers.some((u) => u.id === vehicleSaved)) {
+          return vehicleSaved;
+        }
+      }
+
+      // 2. Check if this specific actor (public or specific superadmin) has a remembered user in localStorage
+      const actorSaved = safeStorage.get(getActorStorageKey(currentUser));
+      if (actorSaved && availableUsers.some((u) => u.id === actorSaved)) {
+        return actorSaved;
+      }
+
+      // 3. Fallback: if logged in as superadmin, default to superadmin; else first active user
+      if (currentUser?.userId && availableUsers.some((u) => u.id === currentUser.userId)) {
+        return currentUser.userId;
+      }
+      return availableUsers[0]?.id || "";
+    },
+    [currentUser, isSuperadmin]
+  );
+
   const [selectedUserId, setSelectedUserId] = useState<string>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem(LAST_IMPORT_USER_KEY);
-      if (saved) return saved;
-    }
+    if (currentUser && !isSuperadmin) return currentUser.userId;
+    const actorSaved = safeStorage.get(getActorStorageKey(currentUser));
+    if (actorSaved) return actorSaved;
     return currentUser?.userId || "";
   });
+
+  const selectedUser = useMemo(
+    () => users.find((u) => u.id === selectedUserId),
+    [users, selectedUserId]
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -1380,31 +1458,44 @@ function ImportModal({
         setUsers(data);
         setSelectedUserId((prev) => {
           if (prev && data.some((u) => u.id === prev)) return prev;
-          const saved = typeof window !== "undefined" ? localStorage.getItem(LAST_IMPORT_USER_KEY) : null;
-          if (saved && data.some((u) => u.id === saved)) return saved;
-          const def = currentUser?.userId && data.some((u) => u.id === currentUser.userId)
-            ? currentUser.userId
-            : data[0].id;
-          if (typeof window !== "undefined") {
-            localStorage.setItem(LAST_IMPORT_USER_KEY, def);
-          }
-          return def;
+          return resolveTargetUserId(data, primaryVehicle);
         });
       })
       .catch(() => {});
     return () => {
       mounted = false;
     };
-  }, [currentUser]);
+  }, [resolveTargetUserId, primaryVehicle]);
 
   const handleUserChange = (id: string) => {
     setSelectedUserId(id);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(LAST_IMPORT_USER_KEY, id);
-    }
+    setInlineError(null);
+    // Remember for this specific actor in localStorage
+    safeStorage.set(getActorStorageKey(currentUser), id);
+    // If vehicle is present in parsed SMS, also remember this vehicle's user in localStorage
+    parsed.forEach((p) => {
+      if (p.vehicleNumber) {
+        safeStorage.set(getVehicleStorageKey(p.vehicleNumber), id);
+      }
+    });
   };
 
-  const parsed: ParsedToken[] = useMemo(() => parseTokenSms(text), [text]);
+  const handleTextChange = (newText: string) => {
+    setText(newText);
+    setInlineError(null);
+
+    // If a vehicle is detected, check if that vehicle has a remembered user in localStorage
+    if (canChooseUser) {
+      const detected = parseTokenSms(newText);
+      const v = detected[0]?.vehicleNumber;
+      if (v) {
+        const vehicleSaved = safeStorage.get(getVehicleStorageKey(v));
+        if (vehicleSaved && users.some((u) => u.id === vehicleSaved)) {
+          setSelectedUserId(vehicleSaved);
+        }
+      }
+    }
+  };
 
   const previewMatches = useMemo(() => {
     return parsed.map((p) => {
@@ -1422,11 +1513,34 @@ function ImportModal({
 
   const hasUpdates = previewMatches.some((m) => !!m.match);
 
-  const submit = async () => {
+  const handleInitialClick = () => {
+    setInlineError(null);
+    if (!parsed.length) return;
+    if (!selectedUserId) {
+      setInlineError("Please select a user to assign this token to.");
+      return;
+    }
+    if (isPublic) {
+      // For public additions, require explicit confirmation of the target user!
+      setConfirmingUser(true);
+    } else {
+      executeSubmit();
+    }
+  };
+
+  const executeSubmit = async () => {
     setBusy(true);
+    setInlineError(null);
     try {
-      if (selectedUserId && typeof window !== "undefined") {
-        localStorage.setItem(LAST_IMPORT_USER_KEY, selectedUserId);
+      if (selectedUserId) {
+        // Save remembered user for this actor in localStorage
+        safeStorage.set(getActorStorageKey(currentUser), selectedUserId);
+        // Save remembered user for each vehicle in localStorage
+        parsed.forEach((p) => {
+          if (p.vehicleNumber) {
+            safeStorage.set(getVehicleStorageKey(p.vehicleNumber), selectedUserId);
+          }
+        });
       }
       const { results } = await api<{ results: { action: string }[] }>("/api/tokens/import", {
         method: "POST",
@@ -1440,7 +1554,9 @@ function ImportModal({
       const u = results.length - c;
       onDone(c && u ? `${c} added, ${u} updated` : c ? `${c} token(s) added` : `${u} token(s) updated`);
     } catch (e) {
-      onError((e as Error).message);
+      const msg = (e as Error).message;
+      setInlineError(msg);
+      onError(msg);
     } finally {
       setBusy(false);
     }
@@ -1448,139 +1564,316 @@ function ImportModal({
 
   return (
     <ModalSheet
-      title="Import Fuel Token"
-      subtitle="Paste SMS message to auto-extract details"
+      title={confirmingUser ? "Confirm User Assignment" : "Import Fuel Token"}
+      subtitle={
+        confirmingUser
+          ? `Adding for @${selectedUser?.username || "user"}`
+          : "Paste SMS message to auto-extract details"
+      }
       onClose={onClose}
       footer={
-        <div className="flex gap-2">
-          <button
-            className="h-11 flex-1 rounded-xl bg-emerald-500 text-sm font-bold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50 active:scale-98 transition-colors"
-            disabled={!parsed.length || busy}
-            onClick={submit}
-          >
-            {busy ? (
-              <span className="flex items-center justify-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Saving...</span>
-              </span>
-            ) : hasUpdates ? (
-              parsed.length > 1 ? `Save & Update ${parsed.length} Tokens` : "Save & Update Token"
-            ) : parsed.length ? (
-              `Save ${parsed.length} Token${parsed.length > 1 ? "s" : ""}`
-            ) : (
-              "Save Token"
-            )}
-          </button>
-          <button
-            className="h-11 rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-800 transition-colors"
-            onClick={onClose}
-          >
-            Cancel
-          </button>
-        </div>
-      }
-    >
-      {/* Target User Selector (Remembers Last Selection) */}
-      {users.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
-              Assign to User
-            </label>
-            <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
-              <Check className="h-3 w-3" />
-              <span>Selection Remembered</span>
-            </span>
-          </div>
-          <div className="relative">
-            <UserIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-            <select
-              value={selectedUserId}
-              onChange={(e) => handleUserChange(e.target.value)}
-              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 py-2.5 pl-9 pr-9 text-xs font-mono text-zinc-100 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 focus:outline-none appearance-none cursor-pointer"
+        confirmingUser ? (
+          <div className="flex gap-2">
+            <button
+              className="h-11 flex-1 rounded-xl bg-emerald-500 text-xs sm:text-sm font-bold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50 active:scale-98 transition-colors flex items-center justify-center gap-2 shadow-sm shadow-emerald-500/20"
+              disabled={busy || !selectedUserId}
+              onClick={executeSubmit}
             >
-              {users.map((u) => (
-                <option key={u.id} value={u.id} className="bg-zinc-900 text-zinc-100 font-mono">
-                  @{u.username} {u.name ? `· ${u.name}` : ""} {u.role === "superadmin" ? "(Superadmin)" : ""}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-          </div>
-        </div>
-      )}
-
-      <div>
-        <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
-          SMS Message (Urdu / English)
-        </label>
-        <textarea
-          dir="rtl"
-          autoFocus={!initial}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="یہاں ٹوکن میسج پیسٹ کریں..."
-          className="input h-28 resize-none text-sm leading-relaxed"
-        />
-      </div>
-
-      <div>
-        <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
-          Phone Number <span className="text-zinc-500 font-normal">(optional)</span>
-        </label>
-        <input
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          inputMode="tel"
-          placeholder="03XXXXXXXXX"
-          className="input text-sm"
-        />
-      </div>
-
-      <div>
-        <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
-          Detected Tokens ({parsed.length})
-        </div>
-
-        {parsed.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900 p-4 text-center text-xs text-zinc-500">
-            Paste your message above. Vehicle number, token ID, and relief amount will auto-populate.
+              {busy ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Adding Token...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="h-4 w-4" strokeWidth={3} />
+                  <span>Confirm & Add for @{selectedUser?.username || "User"}</span>
+                </>
+              )}
+            </button>
+            <button
+              className="h-11 rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-xs sm:text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-800 transition-colors"
+              onClick={() => {
+                setConfirmingUser(false);
+                setInlineError(null);
+              }}
+              disabled={busy}
+            >
+              Back
+            </button>
           </div>
         ) : (
-          <div className="space-y-2">
-            {previewMatches.map(({ p, match }) => (
+          <div className="flex gap-2">
+            <button
+              className="h-11 flex-1 rounded-xl bg-emerald-500 text-sm font-bold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50 active:scale-98 transition-colors"
+              disabled={!parsed.length || busy}
+              onClick={handleInitialClick}
+            >
+              {isPublic
+                ? parsed.length > 1
+                  ? `Confirm User & Add ${parsed.length} Tokens`
+                  : "Confirm User & Add Token"
+                : hasUpdates
+                ? parsed.length > 1
+                  ? `Save & Update ${parsed.length} Tokens`
+                  : "Save & Update Token"
+                : parsed.length
+                ? `Save ${parsed.length} Token${parsed.length > 1 ? "s" : ""}`
+                : "Save Token"}
+            </button>
+            <button
+              className="h-11 rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-800 transition-colors"
+              onClick={onClose}
+            >
+              Cancel
+            </button>
+          </div>
+        )
+      }
+    >
+      {confirmingUser ? (
+        /* Confirmation View before adding from public */
+        <div className="space-y-4">
+          <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 p-4">
+            <div className="flex items-center gap-2 text-xs font-bold text-amber-400">
+              <ShieldAlert className="h-4 w-4 shrink-0" />
+              <span>Public Token Assignment</span>
+            </div>
+            <p className="mt-1.5 text-xs text-zinc-300 leading-relaxed">
+              You are adding this token from public view. Please confirm the owner user account before saving to the database.
+            </p>
+          </div>
+
+          {/* User Confirmation Card */}
+          <div className="rounded-xl border border-zinc-700/80 bg-zinc-900/90 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                Assigned User Account
+              </span>
+              <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                <Check className="h-3 w-3" />
+                <span>Selected Owner</span>
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/25 shrink-0">
+                <UserIcon className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm font-bold text-white">
+                    @{selectedUser?.username || "unknown"}
+                  </span>
+                  {selectedUser?.role === "superadmin" && (
+                    <span className="rounded bg-purple-500/20 px-1.5 py-0.5 text-[9px] font-bold text-purple-300">
+                      Superadmin
+                    </span>
+                  )}
+                </div>
+                {selectedUser?.name && (
+                  <p className="text-xs text-zinc-400 mt-0.5">{selectedUser.name}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Quick change dropdown if user made a wrong selection */}
+            <div className="pt-2 border-t border-zinc-800">
+              <label className="text-[10px] font-semibold text-zinc-400 block mb-1">
+                Wrong user? Assign to a different user:
+              </label>
+              <div className="relative">
+                <select
+                  value={selectedUserId}
+                  onChange={(e) => handleUserChange(e.target.value)}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 py-2 pl-3 pr-8 text-xs font-mono text-zinc-200 focus:border-emerald-500 focus:outline-none appearance-none cursor-pointer"
+                >
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      @{u.username} {u.name ? `· ${u.name}` : ""} {u.role === "superadmin" ? "(Superadmin)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+              </div>
+            </div>
+          </div>
+
+          {/* Tokens Summary */}
+          <div className="rounded-xl border border-zinc-800 bg-[#141416] p-3.5 space-y-2">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+              Token Details ({parsed.length})
+            </div>
+            {parsed.map((p) => (
               <div
                 key={p.tokenNumber}
-                className={`rounded-xl border p-3 text-xs ${
-                  match
-                    ? "border-amber-500/30 bg-amber-950/20"
-                    : "border-emerald-500/30 bg-emerald-950/20"
-                }`}
+                className="flex items-center justify-between text-xs py-1 border-b border-zinc-800/60 last:border-0"
               >
-                <div className="flex items-center justify-between text-zinc-200">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono font-bold text-sm text-emerald-400">
-                      {p.tokenNumber}
-                    </span>
-                    {match && (
-                      <span className="rounded bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
-                        {match.tokenNumber === p.tokenNumber
-                          ? "Updates existing token"
-                          : `Updates existing vehicle (${match.vehicleNumber})`}
-                      </span>
-                    )}
-                  </div>
-                  <span className="font-semibold">{p.amount != null ? `Rs ${p.amount}` : ""}</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <Car className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                  <span className="font-mono font-bold text-white break-all">
+                    {p.vehicleNumber || "Unknown Vehicle"}
+                  </span>
+                  <span className="font-mono text-zinc-400">· #{p.tokenNumber}</span>
                 </div>
-                <div className="mt-1 flex items-center justify-between text-zinc-400">
-                  <span className="font-mono">{p.vehicleNumber || "Unknown Vehicle"}</span>
-                  <span>{fmt(p.validUntil)}</span>
-                </div>
+                <span className="font-semibold text-emerald-400 shrink-0 ml-2">
+                  {p.amount != null ? `Rs ${p.amount}` : ""}
+                </span>
               </div>
             ))}
           </div>
-        )}
-      </div>
+
+          {/* Inline Error Alert (e.g. if already assigned to other user) */}
+          {inlineError && (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-3.5 text-xs text-rose-300 flex items-start gap-2.5">
+              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="font-bold text-rose-200">Assignment Conflict</div>
+                <div className="mt-0.5 leading-relaxed">{inlineError}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Standard Import Form */
+        <>
+          {/* Target User Selector or Current User Badge */}
+          {canChooseUser ? (
+            users.length > 0 && (
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-300 block flex items-center gap-1.5">
+                    <UserIcon className="h-3.5 w-3.5 text-emerald-400" />
+                    <span>Assign to User</span>
+                    {isPublic && (
+                      <span className="rounded bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.2 text-[9px] font-semibold text-amber-300">
+                        Confirmation Required
+                      </span>
+                    )}
+                  </label>
+                  <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                    <Check className="h-3 w-3" />
+                    <span>{isPublic ? "Public Remembered" : "Remembered for you"}</span>
+                  </span>
+                </div>
+                <div className="relative">
+                  <UserIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                  <select
+                    value={selectedUserId}
+                    onChange={(e) => handleUserChange(e.target.value)}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 py-2.5 pl-9 pr-9 text-xs font-mono text-zinc-100 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 focus:outline-none appearance-none cursor-pointer"
+                  >
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id} className="bg-zinc-900 text-zinc-100 font-mono">
+                        @{u.username} {u.name ? `· ${u.name}` : ""} {u.role === "superadmin" ? "(Superadmin)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                </div>
+              </div>
+            )
+          ) : (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <UserIcon className="h-4 w-4 text-emerald-400" />
+                <span className="text-xs font-medium text-zinc-300">
+                  Assigning to your account: <strong className="font-mono text-white">@{currentUser?.username}</strong>
+                </span>
+              </div>
+              <span className="rounded bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                Current User
+              </span>
+            </div>
+          )}
+
+          {/* Inline Error on normal form if any */}
+          {inlineError && (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-3.5 text-xs text-rose-300 flex items-start gap-2.5">
+              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="font-bold text-rose-200">Unable to Add Token</div>
+                <div className="mt-0.5 leading-relaxed">{inlineError}</div>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+              SMS Message (Urdu / English)
+            </label>
+            <textarea
+              dir="rtl"
+              autoFocus={!initial}
+              value={text}
+              onChange={(e) => handleTextChange(e.target.value)}
+              placeholder="یہاں ٹوکن میسج پیسٹ کریں..."
+              className="input h-28 resize-none text-sm leading-relaxed"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+              Phone Number <span className="text-zinc-500 font-normal">(optional)</span>
+            </label>
+            <input
+              value={phone}
+              onChange={(e) => {
+                setPhone(e.target.value);
+                setInlineError(null);
+              }}
+              inputMode="tel"
+              placeholder="03XXXXXXXXX"
+              className="input text-sm"
+            />
+          </div>
+
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
+              Detected Tokens ({parsed.length})
+            </div>
+
+            {parsed.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900 p-4 text-center text-xs text-zinc-500">
+                Paste your message above. Vehicle number, token ID, and relief amount will auto-populate.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {previewMatches.map(({ p, match }) => (
+                  <div
+                    key={p.tokenNumber}
+                    className={`rounded-xl border p-3 text-xs ${
+                      match
+                        ? "border-amber-500/30 bg-amber-950/20"
+                        : "border-emerald-500/30 bg-emerald-950/20"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between text-zinc-200">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-sm text-emerald-400">
+                          {p.tokenNumber}
+                        </span>
+                        {match && (
+                          <span className="rounded bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
+                            {match.tokenNumber === p.tokenNumber
+                              ? "Updates existing token"
+                              : `Updates existing vehicle (${match.vehicleNumber})`}
+                          </span>
+                        )}
+                      </div>
+                      <span className="font-semibold">{p.amount != null ? `Rs ${p.amount}` : ""}</span>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-zinc-400">
+                      <span className="font-mono">{p.vehicleNumber || "Unknown Vehicle"}</span>
+                      <span>{fmt(p.validUntil)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </ModalSheet>
   );
 }

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TokenDTO } from "@/lib/serialize";
+import type { UserSession } from "@/lib/auth";
+import { UsersManagementModal } from "./UsersManagementModal";
 import { looksLikeTokenSms, parseTokenSms, type ParsedToken } from "@/lib/parseSms";
 import { COOLDOWN_DAYS } from "@/lib/status";
 import {
@@ -25,12 +27,18 @@ import {
   CalendarX2,
   Loader2,
   ChevronRight,
+  ChevronDown,
   Lock,
   Unlock,
   KeyRound,
   PlusCircle,
   FileText,
   RefreshCw,
+  Users,
+  Shield,
+  User as UserIcon,
+  Eye,
+  EyeOff,
   type LucideIcon,
 } from "lucide-react";
 
@@ -87,19 +95,19 @@ const STATUS_CONFIG: Record<
 > = {
   available: {
     label: "Available",
-    badge: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30",
+    badge: "bg-emerald-500/12 text-emerald-300 border border-emerald-500/25",
     accent: "bg-emerald-500",
     icon: Check,
   },
   used: {
     label: "Cooldown",
-    badge: "bg-amber-500/15 text-amber-400 border border-amber-500/30",
+    badge: "bg-amber-500/12 text-amber-300 border border-amber-500/25",
     accent: "bg-amber-500",
     icon: Hourglass,
   },
   expired: {
     label: "Expired",
-    badge: "bg-rose-500/15 text-rose-400 border border-rose-500/30",
+    badge: "bg-rose-500/12 text-rose-300 border border-rose-500/25",
     accent: "bg-rose-500",
     icon: CalendarX2,
   },
@@ -134,6 +142,10 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   const [historyFor, setHistoryFor] = useState<TokenDTO | null>(null);
   const [detailFor, setDetailFor] = useState<TokenDTO | null>(null);
   const [isAuth, setIsAuth] = useState(false);
+  const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
+  const [showUsersModal, setShowUsersModal] = useState(false);
+  const [selectedUserFilter, setSelectedUserFilter] = useState<string>("all");
+  const [allUsersList, setAllUsersList] = useState<{ id: string; username: string; name: string }[]>([]);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
   const [confirmState, setConfirmState] = useState<{
@@ -153,32 +165,57 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
     toastTimer.current = setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      setTokens(await api<TokenDTO[]>("/api/tokens"));
-    } catch {
-      // Unauthenticated / locked state: clear tokens without error toast
-      setTokens([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const load = useCallback(
+    async (userObj = currentUser, filterUser = selectedUserFilter) => {
+      setLoading(true);
+      try {
+        const url =
+          userObj?.role === "superadmin" && filterUser && filterUser !== "all"
+            ? `/api/tokens?userId=${filterUser}`
+            : "/api/tokens";
+        const data = await api<TokenDTO[]>(url);
+        setTokens(data);
+
+        if (userObj?.role === "superadmin") {
+          const uList = await api<{ id: string; username: string; name: string }[]>("/api/users").catch(() => []);
+          setAllUsersList(uList);
+        }
+      } catch {
+        setTokens([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [currentUser, selectedUserFilter]
+  );
 
   useEffect(() => {
-    const hasAuth = document.cookie.includes("fsm_auth=authenticated");
-    setIsAuth(hasAuth);
-    if (hasAuth) {
-      load();
-    } else {
-      setLoading(false);
-    }
+    const checkAuth = async () => {
+      try {
+        const res = await api<{ authenticated: boolean; user: UserSession | null }>("/api/auth");
+        if (res.authenticated && res.user) {
+          setIsAuth(true);
+          setCurrentUser(res.user);
+          load(res.user);
+        } else {
+          setIsAuth(false);
+          setCurrentUser(null);
+          setLoading(false);
+        }
+      } catch {
+        setIsAuth(false);
+        setCurrentUser(null);
+        setLoading(false);
+      }
+    };
+    checkAuth();
     const i = setInterval(() => setTick((t) => t + 1), 60000);
     return () => clearInterval(i);
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const requireAuth = (action: () => void) => {
-    if (isAuth || document.cookie.includes("fsm_auth=authenticated")) {
+    if (isAuth) {
       action();
     } else {
       setPendingAction(() => action);
@@ -189,8 +226,9 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   const logout = async () => {
     await fetch("/api/auth", { method: "DELETE" }).catch(() => {});
     setIsAuth(false);
+    setCurrentUser(null);
     setTokens([]);
-    notify("Locked / Logged out");
+    notify("Logged out");
   };
 
   useEffect(() => {
@@ -342,32 +380,43 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   };
 
   return (
-    <div className="relative min-h-dvh bg-[#090d16] text-slate-100">
+    <div className="relative min-h-dvh bg-[#09090b] text-zinc-100">
       {/* Top Header */}
-      <header className="pt-safe sticky top-0 z-20 border-b border-slate-800 bg-[#090d16]">
+      <header className="pt-safe sticky top-0 z-20 border-b border-zinc-800/80 bg-[#121214]/95 backdrop-blur-md">
         <div className="mx-auto flex max-w-lg items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500 text-slate-950">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500 text-zinc-950 shadow-sm shadow-emerald-500/20">
               <Fuel className="h-5 w-5" strokeWidth={2.2} />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-sm font-bold text-white tracking-tight">Fuel Token Manager</h1>
-                <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400">
+                <span className="rounded bg-zinc-800/90 border border-zinc-700/60 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-400">
                   {COOLDOWN_DAYS}d Cooldown
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400">Government Fuel Relief Tokens</p>
+              <p className="text-[11px] text-zinc-400">Government Fuel Relief Tokens</p>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5">
             {isAuth ? (
               <>
+                {currentUser?.role === "superadmin" && (
+                  <button
+                    onClick={() => setShowUsersModal(true)}
+                    className="flex h-9 items-center gap-1.5 rounded-xl border border-purple-500/30 bg-purple-500/10 px-2.5 text-xs font-semibold text-purple-300 transition hover:bg-purple-500/20 active:scale-95"
+                    title="User Management (Superadmin)"
+                  >
+                    <Users className="h-3.5 w-3.5 text-purple-400" />
+                    <span className="hidden xs:inline">Users</span>
+                  </button>
+                )}
+
                 <button
                   onClick={() => load()}
                   disabled={loading}
-                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-300 transition hover:bg-slate-700 hover:text-white active:scale-95 disabled:opacity-50"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-700/80 bg-zinc-800 text-zinc-300 transition hover:bg-zinc-700 hover:text-white active:scale-95 disabled:opacity-50"
                   title="Refresh data"
                   aria-label="Refresh data"
                 >
@@ -376,16 +425,23 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
 
                 <button
                   onClick={logout}
-                  className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 px-2.5 text-xs font-semibold text-slate-300 transition hover:bg-slate-700 hover:text-white active:scale-95"
-                  title="Logout"
+                  className="flex h-9 items-center gap-1.5 rounded-xl border border-zinc-700/80 bg-zinc-800 px-2.5 text-xs font-semibold text-zinc-300 transition hover:bg-zinc-700 hover:text-white active:scale-95"
+                  title="Click to logout"
                 >
-                  <Unlock className="h-3.5 w-3.5 text-emerald-400" />
-                  <span className="hidden xs:inline">Admin</span>
+                  {currentUser?.role === "superadmin" ? (
+                    <Shield className="h-3.5 w-3.5 text-purple-400" />
+                  ) : (
+                    <UserIcon className="h-3.5 w-3.5 text-emerald-400" />
+                  )}
+                  <span className="hidden xs:inline font-mono">
+                    @{currentUser?.username || "user"}
+                  </span>
+                  <Unlock className="h-3 w-3 text-zinc-500 ml-0.5" />
                 </button>
 
                 <button
                   onClick={() => requireAuth(() => setEditing({}))}
-                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-slate-200 transition hover:bg-slate-700 hover:text-white active:scale-95"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-zinc-700/80 bg-zinc-800 text-zinc-200 transition hover:bg-zinc-700 hover:text-white active:scale-95"
                   aria-label="Add manually"
                 >
                   <Plus className="h-4 w-4" />
@@ -394,15 +450,41 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
             ) : (
               <button
                 onClick={() => setShowLoginModal(true)}
-                className="flex h-9 items-center gap-1.5 rounded-xl bg-white px-3 text-xs font-bold text-slate-950 transition hover:bg-slate-100 active:scale-95"
+                className="flex h-9 items-center gap-1.5 rounded-xl bg-emerald-500 px-3.5 text-xs font-bold text-zinc-950 transition hover:bg-emerald-400 active:scale-95 shadow-sm shadow-emerald-500/20"
                 title="Login to unlock"
               >
-                <Lock className="h-3.5 w-3.5 text-slate-950" />
+                <Lock className="h-3.5 w-3.5 text-zinc-950" />
                 <span>Login</span>
               </button>
             )}
           </div>
         </div>
+
+        {/* User Scope Selector for Superadmin */}
+        {isAuth && currentUser?.role === "superadmin" && (
+          <div className="mx-auto max-w-lg px-4 pb-2.5 flex items-center justify-between text-xs">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1">
+              <Users className="h-3 w-3 text-purple-400" />
+              <span>Scope:</span>
+            </span>
+            <select
+              value={selectedUserFilter}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedUserFilter(val);
+                load(currentUser, val);
+              }}
+              className="rounded-lg border border-zinc-700/80 bg-zinc-800 px-2.5 py-1 text-xs font-mono text-zinc-200 focus:border-emerald-500 focus:outline-none"
+            >
+              <option value="all">All Users ({allUsersList.length})</option>
+              {allUsersList.map((u) => (
+                <option key={u.id} value={u.id}>
+                  @{u.username} {u.name ? `(${u.name})` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Filter Tabs - Only shown when logged in */}
         {isAuth && (
@@ -418,16 +500,16 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
                       setFilter(tab.key);
                       vibrate(8);
                     }}
-                    className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    className={`flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${
                       active
-                        ? "bg-white text-slate-950"
-                        : "border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
+                        ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/35 shadow-sm shadow-emerald-500/10"
+                        : "border border-zinc-800/80 bg-zinc-900/60 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60 hover:border-zinc-700"
                     }`}
                   >
                     <span>{tab.label}</span>
                     <span
                       className={`rounded px-1.5 py-0.2 text-[10px] font-mono ${
-                        active ? "bg-slate-200 text-slate-950" : "bg-slate-800 text-slate-400"
+                        active ? "bg-emerald-500/25 text-emerald-200 font-bold" : "bg-zinc-800 text-zinc-400"
                       }`}
                     >
                       {count}
@@ -446,11 +528,11 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
           /* INITIAL LOADING STATE FOR LOGGED IN USER */
           <div className="space-y-3 pt-1">
             <div className="flex items-center justify-between px-1 mb-1">
-              <div className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+              <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
                 <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
                 <span>Loading token records...</span>
               </div>
-              <span className="text-[11px] text-slate-500">Connecting to database</span>
+              <span className="text-[11px] text-zinc-500">Connecting to database</span>
             </div>
             {[0, 1, 2, 3].map((i) => (
               <TokenCardSkeleton key={i} />
@@ -466,12 +548,12 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
                   <ClipboardCheck className="h-4 w-4" />
                   <span>Token detected in clipboard</span>
                 </div>
-                <p dir="rtl" className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-slate-300">
+                <p dir="rtl" className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-zinc-300">
                   {clipboardHint}
                 </p>
                 <div className="mt-3 flex gap-2">
                   <button
-                    className="flex-1 rounded-xl bg-emerald-500 py-2 text-xs font-bold text-slate-950 transition hover:bg-emerald-400 active:scale-98"
+                    className="flex-1 rounded-xl bg-emerald-500 py-2 text-xs font-bold text-zinc-950 transition hover:bg-emerald-400 active:scale-98 shadow-sm shadow-emerald-500/20"
                     onClick={() => {
                       setImportText(clipboardHint);
                       setClipboardHint(null);
@@ -480,7 +562,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
                     Import Token Now
                   </button>
                   <button
-                    className="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-400 hover:text-white"
+                    className="rounded-xl border border-zinc-700/80 bg-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-400 hover:text-white"
                     onClick={() => setClipboardHint(null)}
                   >
                     Dismiss
@@ -490,48 +572,48 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
             )}
 
             {/* Add New Record Section */}
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <div className="rounded-2xl border border-zinc-800/90 bg-[#141416] p-5 shadow-lg shadow-black/20">
               <div className="flex items-center gap-2.5 mb-1.5">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                   <PlusCircle className="h-5 w-5" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold text-slate-100">Add New Record</h2>
-                  <p className="text-xs text-slate-400">Paste SMS notification to add or update token</p>
+                  <h2 className="text-sm font-bold text-zinc-100">Add New Record</h2>
+                  <p className="text-xs text-zinc-400">Paste SMS notification to add or update token</p>
                 </div>
               </div>
 
               <div className="mt-4 space-y-2.5">
                 <button
                   onClick={pasteFromClipboard}
-                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-950 transition hover:bg-slate-100 active:scale-98"
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 text-sm font-bold text-zinc-950 transition hover:bg-emerald-400 active:scale-98 shadow-sm shadow-emerald-500/25"
                 >
-                  <ClipboardPaste className="h-4 w-4 text-slate-950" />
+                  <ClipboardPaste className="h-4 w-4 text-zinc-950" />
                   <span>Paste SMS from Clipboard</span>
                 </button>
 
                 <button
                   onClick={() => setImportText("")}
-                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 text-xs font-bold text-slate-200 transition hover:bg-slate-700 hover:text-white active:scale-98"
+                  className="flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-zinc-700/80 bg-zinc-800/80 px-4 text-xs font-bold text-zinc-200 transition hover:bg-zinc-700 hover:text-white active:scale-98"
                 >
-                  <FileText className="h-4 w-4 text-slate-400" />
+                  <FileText className="h-4 w-4 text-zinc-400" />
                   <span>Type or Paste SMS Text</span>
                 </button>
               </div>
             </div>
 
             {/* Locked Records Notice */}
-            <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-center">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 text-amber-400">
+            <div className="rounded-2xl border border-zinc-800/80 bg-[#141416]/70 p-6 text-center shadow-lg shadow-black/20">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-400">
                 <Lock className="h-5 w-5" />
               </div>
-              <h3 className="text-sm font-bold text-slate-200">Records Protected</h3>
-              <p className="mt-1 text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+              <h3 className="text-sm font-bold text-zinc-200">Records Protected</h3>
+              <p className="mt-1 text-xs text-zinc-400 max-w-xs mx-auto leading-relaxed">
                 Login to view registered vehicles, active tokens, cooldown timers, and manage claims.
               </p>
               <button
                 onClick={() => setShowLoginModal(true)}
-                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-slate-700 active:scale-95"
+                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-800/90 px-5 py-2.5 text-xs font-bold text-white transition hover:bg-zinc-700 active:scale-95 shadow-sm"
               >
                 <KeyRound className="h-4 w-4 text-emerald-400" />
                 <span>Login to View All Options</span>
@@ -543,7 +625,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
           <>
             {/* Search Bar */}
             <div className="relative mb-3">
-              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
               <input
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
@@ -555,7 +637,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
                 <button
                   onClick={() => setQ("")}
                   aria-label="Clear search"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded-full bg-slate-800 text-slate-400 hover:text-white"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-800 text-zinc-400 hover:text-white"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -564,17 +646,17 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
 
             {/* Clipboard Snippet Detection Banner */}
             {clipboardHint && (
-              <div className="animate-fade mb-3 rounded-xl border border-slate-700 bg-slate-900 p-3">
+              <div className="animate-fade mb-3 rounded-xl border border-zinc-700 bg-zinc-900 p-3">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
                   <ClipboardCheck className="h-4 w-4" />
                   <span>Token detected in clipboard</span>
                 </div>
-                <p dir="rtl" className="mt-1 line-clamp-2 text-xs leading-relaxed text-slate-300">
+                <p dir="rtl" className="mt-1 line-clamp-2 text-xs leading-relaxed text-zinc-300">
                   {clipboardHint}
                 </p>
                 <div className="mt-2.5 flex gap-2">
                   <button
-                    className="flex-1 rounded-lg bg-emerald-500 py-1.5 text-xs font-bold text-slate-950 transition hover:bg-emerald-400 active:scale-98"
+                    className="flex-1 rounded-lg bg-emerald-500 py-1.5 text-xs font-bold text-zinc-950 transition hover:bg-emerald-400 active:scale-98"
                     onClick={() => {
                       setImportText(clipboardHint);
                       setClipboardHint(null);
@@ -583,7 +665,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
                     Import Token
                   </button>
                   <button
-                    className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white"
+                    className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-white"
                     onClick={() => setClipboardHint(null)}
                   >
                     Dismiss
@@ -596,25 +678,25 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
             {loading ? (
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between px-1 mb-1">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-slate-400">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-zinc-400">
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
                     <span>Loading token records...</span>
                   </div>
-                  <span className="text-[11px] text-slate-500">Syncing with database</span>
+                  <span className="text-[11px] text-zinc-500">Syncing with database</span>
                 </div>
                 {[0, 1, 2, 3].map((i) => (
                   <TokenCardSkeleton key={i} />
                 ))}
               </div>
             ) : visible.length === 0 ? (
-              <div className="mt-12 rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center">
-                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-slate-800 text-slate-400">
+              <div className="mt-12 rounded-2xl border border-zinc-800 bg-zinc-900 p-8 text-center">
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-800 text-zinc-400">
                   <Fuel className="h-6 w-6" />
                 </div>
-                <h3 className="text-sm font-semibold text-slate-200">
+                <h3 className="text-sm font-semibold text-zinc-200">
                   {tokens.length === 0 ? "No tokens yet" : "No matching tokens"}
                 </h3>
-                <p className="mt-1 text-xs text-slate-400 max-w-xs mx-auto leading-relaxed">
+                <p className="mt-1 text-xs text-zinc-400 max-w-xs mx-auto leading-relaxed">
                   {tokens.length === 0
                     ? "Copy a token SMS and tap Paste SMS below to auto-import."
                     : "Try a different search or filter tab."}
@@ -638,28 +720,28 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
       </main>
 
       {/* Floating Bottom Action Bar */}
-      <div className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-slate-800 bg-[#090d16] p-3">
+      <div className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-zinc-800/80 bg-[#121214]/95 backdrop-blur-md p-3">
         <div className="mx-auto max-w-lg">
           {isAuth ? (
             <button
               onClick={pasteFromClipboard}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-950 transition-colors hover:bg-slate-100 active:scale-[0.98]"
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 text-sm font-bold text-zinc-950 transition-all hover:bg-emerald-400 active:scale-[0.98] shadow-sm shadow-emerald-500/25"
             >
-              <ClipboardPaste className="h-4 w-4 text-slate-900" />
+              <ClipboardPaste className="h-4 w-4 text-zinc-950" />
               <span>Paste SMS from Clipboard</span>
             </button>
           ) : (
             <div className="flex gap-2">
               <button
                 onClick={pasteFromClipboard}
-                className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-white px-4 text-sm font-bold text-slate-950 transition-colors hover:bg-slate-100 active:scale-[0.98]"
+                className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 text-sm font-bold text-zinc-950 transition-all hover:bg-emerald-400 active:scale-[0.98] shadow-sm shadow-emerald-500/25"
               >
-                <ClipboardPaste className="h-4 w-4 text-slate-900" />
+                <ClipboardPaste className="h-4 w-4 text-zinc-950" />
                 <span>Paste SMS</span>
               </button>
               <button
                 onClick={() => setShowLoginModal(true)}
-                className="flex h-12 items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800 px-4 text-xs font-bold text-slate-200 transition-colors hover:bg-slate-700 active:scale-[0.98]"
+                className="flex h-12 items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-800/90 px-4 text-xs font-bold text-zinc-200 transition-colors hover:bg-zinc-700 hover:text-white active:scale-[0.98] shadow-sm"
               >
                 <Lock className="h-4 w-4 text-amber-400" />
                 <span>Login</span>
@@ -704,6 +786,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
         <ImportModal
           initial={importText}
           existingTokens={tokens}
+          currentUser={currentUser}
           onClose={() => setImportText(null)}
           onDone={(msg) => {
             setImportText(null);
@@ -733,17 +816,31 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
       {/* History Modal */}
       {historyFor && <HistoryModal token={historyFor} onClose={() => setHistoryFor(null)} />}
 
-      {/* Daily PIN Login Modal */}
+      {/* Users Management Modal (Superadmin only) */}
+      {showUsersModal && currentUser?.role === "superadmin" && (
+        <UsersManagementModal
+          currentUser={currentUser}
+          onClose={() => {
+            setShowUsersModal(false);
+            load(currentUser);
+          }}
+          notify={notify}
+        />
+      )}
+
+      {/* Account Login Modal */}
       {showLoginModal && (
         <LoginModal
           onClose={() => {
             setShowLoginModal(false);
             setPendingAction(null);
           }}
-          onSuccess={() => {
+          onSuccess={(user) => {
             setIsAuth(true);
+            setCurrentUser(user);
             setShowLoginModal(false);
-            notify("Authenticated successfully");
+            notify(`Welcome back, @${user.username}!`);
+            load(user);
             if (pendingAction) {
               const act = pendingAction;
               setPendingAction(null);
@@ -757,19 +854,19 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
       {/* Confirmation Modal */}
       {confirmState && (
         <ModalSheet title={confirmState.title} onClose={() => setConfirmState(null)}>
-          <p className="mb-5 text-sm text-slate-300 leading-relaxed">{confirmState.message}</p>
+          <p className="mb-5 text-sm text-zinc-300 leading-relaxed">{confirmState.message}</p>
           <div className="grid grid-cols-2 gap-2.5">
             <button
-              className="h-11 rounded-xl border border-slate-700 bg-slate-800 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700"
+              className="h-11 rounded-xl border border-zinc-800 bg-zinc-800/80 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-800 transition-colors"
               onClick={() => setConfirmState(null)}
             >
               Cancel
             </button>
             <button
-              className={`h-11 rounded-xl text-sm font-bold text-white transition active:scale-98 ${
+              className={`h-11 rounded-xl text-sm font-bold text-white transition active:scale-98 shadow-sm ${
                 confirmState.danger
-                  ? "bg-rose-600 hover:bg-rose-500 active:bg-rose-700"
-                  : "bg-emerald-500 text-slate-950 hover:bg-emerald-400"
+                  ? "bg-rose-600 hover:bg-rose-500 active:bg-rose-700 shadow-rose-600/20"
+                  : "bg-emerald-500 text-zinc-950 hover:bg-emerald-400 shadow-emerald-500/20"
               }`}
               onClick={() => {
                 confirmState.onYes();
@@ -785,10 +882,10 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
       {/* Notification Toast */}
       {toast && (
         <div
-          className={`animate-toast fixed left-1/2 top-[calc(env(safe-area-inset-top)+1rem)] z-[60] flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold shadow-xl ${
+          className={`animate-toast fixed left-1/2 top-[calc(env(safe-area-inset-top)+1rem)] z-[60] flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold shadow-2xl ${
             toast.err
-              ? "border border-rose-500/40 bg-rose-950 text-rose-200"
-              : "border border-slate-700 bg-slate-900 text-white"
+              ? "border border-rose-500/40 bg-rose-950/95 text-rose-200"
+              : "border border-zinc-800 bg-[#18181b]/95 text-white"
           }`}
         >
           {toast.err ? <X className="h-4 w-4 text-rose-400 shrink-0" /> : <Check className="h-4 w-4 text-emerald-400 shrink-0" />}
@@ -803,30 +900,30 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
 
 function TokenCardSkeleton() {
   return (
-    <div className="relative flex w-full flex-col gap-3 rounded-xl border border-slate-800/90 bg-slate-900/60 p-3.5 sm:flex-row sm:items-center sm:justify-between animate-pulse">
+    <div className="relative flex w-full flex-col gap-3 rounded-xl border border-zinc-800/80 bg-[#141416]/60 p-3.5 sm:flex-row sm:items-center sm:justify-between animate-pulse">
       {/* Left indicator bar */}
-      <span className="absolute inset-y-3 left-0 w-1 rounded-r bg-slate-800" />
+      <span className="absolute inset-y-3 left-0 w-1 rounded-r bg-zinc-800" />
 
       {/* Vehicle and Phone placeholders */}
       <div className="min-w-0 flex-1 pl-2 space-y-2.5">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1.5">
-            <div className="h-4 w-4 rounded bg-slate-800 shrink-0" />
-            <div className="h-5 w-28 rounded-md bg-slate-800" />
+            <div className="h-4 w-4 rounded bg-zinc-800/80 shrink-0" />
+            <div className="h-5 w-28 rounded-md bg-zinc-800/80" />
           </div>
-          <div className="h-4 w-16 rounded bg-slate-800/80" />
+          <div className="h-4 w-16 rounded bg-zinc-800/60" />
         </div>
 
         <div className="flex items-center gap-1.5">
-          <div className="h-3 w-3 rounded bg-slate-800 shrink-0" />
-          <div className="h-3.5 w-32 rounded bg-slate-800/70" />
+          <div className="h-3 w-3 rounded bg-zinc-800/80 shrink-0" />
+          <div className="h-3.5 w-32 rounded bg-zinc-800/60" />
         </div>
       </div>
 
       {/* Action Buttons & Details placeholder */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-800/60 pt-2.5 pl-2 sm:border-0 sm:pt-0 sm:pl-0 sm:justify-end">
-        <div className="h-9 w-16 rounded-lg bg-slate-800" />
-        <div className="h-4 w-12 rounded bg-slate-800/60" />
+      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-zinc-800/60 pt-2.5 pl-2 sm:border-0 sm:pt-0 sm:pl-0 sm:justify-end">
+        <div className="h-9 w-16 rounded-lg bg-zinc-800/80" />
+        <div className="h-4 w-4 rounded-full bg-zinc-800/50" />
       </div>
     </div>
   );
@@ -859,7 +956,7 @@ function TokenListItem({
           onSelect();
         }
       }}
-      className="group relative flex w-full flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/90 p-3.5 transition-colors hover:border-slate-700 hover:bg-slate-850 active:bg-slate-800 cursor-pointer sm:flex-row sm:items-center sm:justify-between"
+      className="group relative flex w-full flex-col gap-3 rounded-xl border border-zinc-800/80 bg-[#141416] p-3.5 transition-all hover:border-zinc-700 hover:bg-[#18181b] active:bg-[#101012] cursor-pointer sm:flex-row sm:items-center sm:justify-between shadow-sm"
     >
       {/* Left indicator bar */}
       <span
@@ -870,9 +967,14 @@ function TokenListItem({
       <div className="min-w-0 flex-1 pl-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="flex items-center gap-1.5 font-mono text-base font-bold tracking-wider text-white break-all">
-            <Car className="h-4 w-4 text-slate-400 shrink-0" />
+            <Car className="h-4 w-4 text-zinc-400 shrink-0" />
             <span>{t.vehicleNumber}</span>
           </span>
+          {t.ownerUsername && (
+            <span className="rounded bg-purple-500/10 border border-purple-500/25 px-1.5 py-0.5 text-[10px] font-mono text-purple-300">
+              @{t.ownerUsername}
+            </span>
+          )}
           <span
             className={`inline-flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold ${conf.badge}`}
           >
@@ -881,26 +983,26 @@ function TokenListItem({
           </span>
         </div>
 
-        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-          <Phone className="h-3 w-3 text-slate-500 shrink-0" />
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-zinc-400">
+          <Phone className="h-3 w-3 text-zinc-500 shrink-0" />
           {t.phoneNumber ? (
-            <span className="font-mono text-slate-300 break-all">{t.phoneNumber}</span>
+            <span className="font-mono text-zinc-300 break-all">{t.phoneNumber}</span>
           ) : (
-            <span className="italic text-slate-500">No phone assigned</span>
+            <span className="italic text-zinc-500">No phone assigned</span>
           )}
-          {t.ownerName && <span className="text-slate-500">· {t.ownerName}</span>}
+          {t.ownerName && <span className="text-zinc-500">· {t.ownerName}</span>}
         </div>
       </div>
 
       {/* Action Buttons */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-slate-800/80 pt-2.5 pl-2 sm:border-0 sm:pt-0 sm:pl-0 sm:justify-end">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-zinc-800/80 pt-2.5 pl-2 sm:border-0 sm:pt-0 sm:pl-0 sm:justify-end">
         {t.status === "used" ? (
           <button
             onClick={(e) => {
               e.stopPropagation();
               onUndo();
             }}
-            className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 text-xs font-semibold text-slate-200 transition hover:bg-slate-750 hover:text-white active:scale-95"
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-800/90 px-3 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-700 hover:text-white active:scale-95"
           >
             <Undo2 className="h-3.5 w-3.5" />
             <span>Undo</span>
@@ -912,16 +1014,15 @@ function TokenListItem({
               e.stopPropagation();
               onUse();
             }}
-            className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 text-xs font-bold text-slate-950 shadow-sm transition hover:bg-emerald-400 active:scale-95"
+            className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 text-xs font-bold text-zinc-950 shadow-sm shadow-emerald-500/20 transition hover:bg-emerald-400 active:scale-95"
           >
             <Check className="h-3.5 w-3.5" strokeWidth={3} />
             <span>Use</span>
           </button>
         )}
 
-        <div className="flex h-8 items-center gap-0.5 text-xs font-medium text-slate-500 group-hover:text-slate-300 transition-colors">
-          <span className="text-[11px]">Details</span>
-          <ChevronRight className="h-3.5 w-3.5" />
+        <div className="flex h-8 w-8 items-center justify-center text-zinc-500 group-hover:text-zinc-300 transition-colors">
+          <ChevronRight className="h-4 w-4" />
         </div>
       </div>
     </div>
@@ -956,28 +1057,28 @@ function ModalSheet({
 
   return (
     <div
-      className="animate-fade fixed inset-0 z-50 flex items-end justify-center bg-black/80 sm:items-center p-0 sm:p-4"
+      className="animate-fade fixed inset-0 z-50 flex items-end justify-center bg-black/80 backdrop-blur-sm sm:items-center p-0 sm:p-4"
       onClick={onClose}
     >
       <div
-        className="animate-sheet relative flex max-h-[92dvh] w-full max-w-lg flex-col rounded-t-2xl border border-slate-800 bg-[#0f172a] shadow-2xl sm:rounded-2xl"
+        className="animate-sheet relative flex max-h-[92dvh] w-full max-w-lg flex-col rounded-t-2xl border border-zinc-800/90 bg-[#121214] shadow-2xl sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Drag pill for mobile */}
         <div className="flex justify-center pt-2.5 pb-1 sm:hidden">
-          <span className="h-1 w-10 rounded-full bg-slate-700" />
+          <span className="h-1 w-10 rounded-full bg-zinc-700/80" />
         </div>
 
         {/* Sticky Header with Close button */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5">
+        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-3.5">
           <div className="min-w-0 pr-2">
             <h2 className="truncate text-base font-bold text-white tracking-tight">{title}</h2>
-            {subtitle && <p className="truncate text-xs text-slate-400 mt-0.5">{subtitle}</p>}
+            {subtitle && <p className="truncate text-xs text-zinc-400 mt-0.5">{subtitle}</p>}
           </div>
           <button
             onClick={onClose}
             aria-label="Close"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-400 hover:text-white active:scale-95 transition-colors"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-800/80 text-zinc-400 hover:text-white active:scale-95 transition-colors"
           >
             <X className="h-4 w-4" />
           </button>
@@ -990,7 +1091,7 @@ function ModalSheet({
 
         {/* Optional Sticky Footer */}
         {footer && (
-          <div className="pb-safe border-t border-slate-800 bg-[#0f172a] px-5 pt-3">
+          <div className="pb-safe border-t border-zinc-800/90 bg-[#121214] px-5 pt-3">
             {footer}
           </div>
         )}
@@ -1033,7 +1134,7 @@ function DetailModal({
         <div className="flex gap-2">
           {token.status === "used" ? (
             <button
-              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-700 bg-slate-800 text-sm font-bold text-slate-200 transition hover:bg-slate-750 active:scale-98"
+              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-zinc-800 bg-zinc-800/80 text-sm font-bold text-zinc-200 transition hover:bg-zinc-700 hover:text-white active:scale-98"
               onClick={onUndo}
             >
               <Undo2 className="h-4 w-4" />
@@ -1041,7 +1142,7 @@ function DetailModal({
             </button>
           ) : (
             <button
-              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-500 text-sm font-bold text-slate-950 transition hover:bg-emerald-400 active:scale-98"
+              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-500 text-sm font-bold text-zinc-950 transition hover:bg-emerald-400 active:scale-98 shadow-sm shadow-emerald-500/20"
               onClick={onUse}
             >
               <Check className="h-4 w-4" strokeWidth={2.5} />
@@ -1050,7 +1151,7 @@ function DetailModal({
           )}
 
           <button
-            className="flex h-11 items-center justify-center rounded-xl border border-slate-700 bg-slate-800 px-4 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700 transition-colors"
+            className="flex h-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-700 transition-colors"
             onClick={onClose}
           >
             Close
@@ -1059,10 +1160,10 @@ function DetailModal({
       }
     >
       {/* Token Number Card */}
-      <div className="rounded-xl border border-slate-700 bg-slate-900 p-4">
+      <div className="rounded-xl border border-zinc-800/90 bg-[#18181b] p-4 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
               Government Token Number
             </div>
             <div className="font-mono text-xl font-bold tracking-wider text-white mt-0.5">
@@ -1071,7 +1172,7 @@ function DetailModal({
           </div>
           <button
             onClick={onCopy}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:text-white active:scale-95 transition-colors"
+            className="flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-800/80 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:text-white active:scale-95 transition-colors"
           >
             <Copy className="h-3.5 w-3.5" />
             <span>Copy</span>
@@ -1081,19 +1182,19 @@ function DetailModal({
 
       {/* Status & Subsidized Amount Cards */}
       <div className="grid grid-cols-2 gap-2.5">
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-3.5">
-          <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+        <div className="rounded-xl border border-zinc-800/90 bg-[#18181b] p-3.5 shadow-sm">
+          <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
             <Banknote className="h-3.5 w-3.5 text-emerald-400" />
             <span>Relief Value</span>
           </div>
           <div className="mt-1 text-xl font-bold text-white">
             {token.amount != null ? `Rs ${token.amount}` : "—"}
           </div>
-          <div className="mt-0.5 text-[11px] text-slate-400">Gov fuel subsidy</div>
+          <div className="mt-0.5 text-[11px] text-zinc-400">Gov fuel subsidy</div>
         </div>
 
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-3.5">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+        <div className="rounded-xl border border-zinc-800/90 bg-[#18181b] p-3.5 shadow-sm">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
             Token Status
           </div>
           <div className="mt-1">
@@ -1104,7 +1205,7 @@ function DetailModal({
               {conf.label}
             </span>
           </div>
-          <div className="mt-1 text-[11px] text-slate-400 truncate">
+          <div className="mt-1 text-[11px] text-zinc-400 truncate">
             {token.status === "used"
               ? `Renew: ${fmt(token.nextAvailableAt)}`
               : token.status === "available" && validFuture
@@ -1115,10 +1216,10 @@ function DetailModal({
       </div>
 
       {/* Timing Details */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900 p-3.5 space-y-2 text-xs">
+      <div className="rounded-xl border border-zinc-800/90 bg-[#18181b] p-3.5 space-y-2 text-xs shadow-sm">
         {token.status === "used" && (
-          <div className="flex items-center justify-between text-amber-400">
-            <span className="flex items-center gap-1.5 text-slate-400">
+          <div className="flex items-center justify-between text-amber-300">
+            <span className="flex items-center gap-1.5 text-zinc-400">
               <Hourglass className="h-3.5 w-3.5 text-amber-400" />
               <span>Renew in</span>
             </span>
@@ -1126,16 +1227,16 @@ function DetailModal({
           </div>
         )}
 
-        <div className="flex items-center justify-between text-slate-300">
-          <span className="flex items-center gap-1.5 text-slate-400">
+        <div className="flex items-center justify-between text-zinc-300">
+          <span className="flex items-center gap-1.5 text-zinc-400">
             <Clock className="h-3.5 w-3.5" />
             <span>SMS Validity</span>
           </span>
           <span className="font-mono">{fmt(token.validUntil)}</span>
         </div>
 
-        <div className="flex items-center justify-between text-slate-300">
-          <span className="flex items-center gap-1.5 text-slate-400">
+        <div className="flex items-center justify-between text-zinc-300">
+          <span className="flex items-center gap-1.5 text-zinc-400">
             <History className="h-3.5 w-3.5" />
             <span>Last Used Date</span>
           </span>
@@ -1144,18 +1245,18 @@ function DetailModal({
       </div>
 
       {/* Contact & Owner Section */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900 p-3.5 space-y-2.5 text-xs">
+      <div className="rounded-xl border border-zinc-800/90 bg-[#18181b] p-3.5 space-y-2.5 text-xs shadow-sm">
         <div className="flex items-center justify-between">
-          <span className="flex items-center gap-1.5 text-slate-400">
-            <Car className="h-3.5 w-3.5 text-slate-500" />
+          <span className="flex items-center gap-1.5 text-zinc-400">
+            <Car className="h-3.5 w-3.5 text-zinc-500" />
             <span>Vehicle Number</span>
           </span>
           <span className="font-mono font-bold text-white">{token.vehicleNumber}</span>
         </div>
 
         <div className="flex items-center justify-between">
-          <span className="flex items-center gap-1.5 text-slate-400">
-            <Phone className="h-3.5 w-3.5 text-slate-500" />
+          <span className="flex items-center gap-1.5 text-zinc-400">
+            <Phone className="h-3.5 w-3.5 text-zinc-500" />
             <span>Phone Number</span>
           </span>
           {token.phoneNumber ? (
@@ -1166,47 +1267,47 @@ function DetailModal({
               {token.phoneNumber}
             </a>
           ) : (
-            <span className="text-slate-500 italic">Not set</span>
+            <span className="text-zinc-500 italic">Not set</span>
           )}
         </div>
 
         {token.ownerName && (
           <div className="flex items-center justify-between">
-            <span className="text-slate-400">Owner Name</span>
+            <span className="text-zinc-400">Owner Name</span>
             <span className="font-medium text-white">{token.ownerName}</span>
           </div>
         )}
 
         {token.notes && (
-          <div className="border-t border-slate-800 pt-2 text-slate-400">
-            <span className="text-slate-500">Note: </span>
+          <div className="border-t border-zinc-800 pt-2 text-zinc-400">
+            <span className="text-zinc-500">Note: </span>
             {token.notes}
           </div>
         )}
       </div>
 
       {/* Quick Action Rows */}
-      <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900">
+      <div className="overflow-hidden rounded-xl border border-zinc-800/90 bg-[#18181b] shadow-sm">
         <button
           onClick={onHistory}
-          className="flex w-full items-center justify-between border-b border-slate-800 p-3 text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors"
+          className="flex w-full items-center justify-between border-b border-zinc-800/80 p-3 text-xs font-semibold text-zinc-300 hover:bg-zinc-800/60 transition-colors"
         >
           <span className="flex items-center gap-2">
-            <History className="h-4 w-4 text-slate-400" />
+            <History className="h-4 w-4 text-zinc-400" />
             <span>Usage History ({token.usageHistory.length})</span>
           </span>
-          <ChevronRight className="h-4 w-4 text-slate-500" />
+          <ChevronRight className="h-4 w-4 text-zinc-500" />
         </button>
 
         <button
           onClick={onEdit}
-          className="flex w-full items-center justify-between border-b border-slate-800 p-3 text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-colors"
+          className="flex w-full items-center justify-between border-b border-zinc-800/80 p-3 text-xs font-semibold text-zinc-300 hover:bg-zinc-800/60 transition-colors"
         >
           <span className="flex items-center gap-2">
-            <Pencil className="h-4 w-4 text-slate-400" />
+            <Pencil className="h-4 w-4 text-zinc-400" />
             <span>Edit Information</span>
           </span>
-          <ChevronRight className="h-4 w-4 text-slate-500" />
+          <ChevronRight className="h-4 w-4 text-zinc-500" />
         </button>
 
         <button
@@ -1217,19 +1318,19 @@ function DetailModal({
             <Trash2 className="h-4 w-4 text-rose-500" />
             <span>Delete Token</span>
           </span>
-          <ChevronRight className="h-4 w-4 text-slate-500" />
+          <ChevronRight className="h-4 w-4 text-zinc-500" />
         </button>
       </div>
 
       {/* Raw SMS Box */}
       {token.lastSms && (
         <div>
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
             Original SMS Notification
           </div>
           <div
             dir="rtl"
-            className="rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs leading-relaxed text-slate-300"
+            className="rounded-xl border border-zinc-800/90 bg-[#09090b] p-3 text-xs leading-relaxed text-zinc-300"
           >
             {token.lastSms}
           </div>
@@ -1241,15 +1342,19 @@ function DetailModal({
 
 /* ---------------- Import Sheet ---------------- */
 
+const LAST_IMPORT_USER_KEY = "fsm_last_import_user_id";
+
 function ImportModal({
   initial,
   existingTokens = [],
+  currentUser,
   onClose,
   onDone,
   onError,
 }: {
   initial: string;
   existingTokens?: TokenDTO[];
+  currentUser?: UserSession | null;
   onClose: () => void;
   onDone: (msg: string) => void;
   onError: (m: string) => void;
@@ -1257,29 +1362,79 @@ function ImportModal({
   const [text, setText] = useState(initial);
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
+  const [users, setUsers] = useState<{ id: string; username: string; name: string; role: string }[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(LAST_IMPORT_USER_KEY);
+      if (saved) return saved;
+    }
+    return currentUser?.userId || "";
+  });
+
+  useEffect(() => {
+    let mounted = true;
+    fetch("/api/users?simple=true")
+      .then((res) => res.json())
+      .then((data) => {
+        if (!mounted || !Array.isArray(data) || data.length === 0) return;
+        setUsers(data);
+        setSelectedUserId((prev) => {
+          if (prev && data.some((u) => u.id === prev)) return prev;
+          const saved = typeof window !== "undefined" ? localStorage.getItem(LAST_IMPORT_USER_KEY) : null;
+          if (saved && data.some((u) => u.id === saved)) return saved;
+          const def = currentUser?.userId && data.some((u) => u.id === currentUser.userId)
+            ? currentUser.userId
+            : data[0].id;
+          if (typeof window !== "undefined") {
+            localStorage.setItem(LAST_IMPORT_USER_KEY, def);
+          }
+          return def;
+        });
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [currentUser]);
+
+  const handleUserChange = (id: string) => {
+    setSelectedUserId(id);
+    if (typeof window !== "undefined") {
+      localStorage.setItem(LAST_IMPORT_USER_KEY, id);
+    }
+  };
+
   const parsed: ParsedToken[] = useMemo(() => parseTokenSms(text), [text]);
 
   const previewMatches = useMemo(() => {
     return parsed.map((p) => {
       const match = existingTokens.find(
         (t) =>
-          t.tokenNumber === p.tokenNumber ||
-          (p.vehicleNumber &&
-            t.vehicleNumber.toUpperCase() === p.vehicleNumber.toUpperCase() &&
-            (!phone.trim() || !t.phoneNumber || t.phoneNumber === phone.trim()))
+          (!selectedUserId || t.userId === selectedUserId) &&
+          (t.tokenNumber === p.tokenNumber ||
+            (p.vehicleNumber &&
+              t.vehicleNumber.toUpperCase() === p.vehicleNumber.toUpperCase() &&
+              (!phone.trim() || !t.phoneNumber || t.phoneNumber === phone.trim())))
       );
       return { p, match };
     });
-  }, [parsed, existingTokens, phone]);
+  }, [parsed, existingTokens, phone, selectedUserId]);
 
   const hasUpdates = previewMatches.some((m) => !!m.match);
 
   const submit = async () => {
     setBusy(true);
     try {
+      if (selectedUserId && typeof window !== "undefined") {
+        localStorage.setItem(LAST_IMPORT_USER_KEY, selectedUserId);
+      }
       const { results } = await api<{ results: { action: string }[] }>("/api/tokens/import", {
         method: "POST",
-        body: JSON.stringify({ text, phoneNumber: phone }),
+        body: JSON.stringify({
+          text,
+          phoneNumber: phone,
+          userId: selectedUserId || undefined,
+        }),
       });
       const c = results.filter((r) => r.action === "created").length;
       const u = results.length - c;
@@ -1299,7 +1454,7 @@ function ImportModal({
       footer={
         <div className="flex gap-2">
           <button
-            className="h-11 flex-1 rounded-xl bg-emerald-500 text-sm font-bold text-slate-950 hover:bg-emerald-400 disabled:opacity-50 active:scale-98 transition-colors"
+            className="h-11 flex-1 rounded-xl bg-emerald-500 text-sm font-bold text-zinc-950 hover:bg-emerald-400 disabled:opacity-50 active:scale-98 transition-colors"
             disabled={!parsed.length || busy}
             onClick={submit}
           >
@@ -1317,7 +1472,7 @@ function ImportModal({
             )}
           </button>
           <button
-            className="h-11 rounded-xl border border-slate-700 bg-slate-800 px-4 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700"
+            className="h-11 rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-800 transition-colors"
             onClick={onClose}
           >
             Cancel
@@ -1325,8 +1480,38 @@ function ImportModal({
         </div>
       }
     >
+      {/* Target User Selector (Remembers Last Selection) */}
+      {users.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block">
+              Assign to User
+            </label>
+            <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+              <Check className="h-3 w-3" />
+              <span>Selection Remembered</span>
+            </span>
+          </div>
+          <div className="relative">
+            <UserIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <select
+              value={selectedUserId}
+              onChange={(e) => handleUserChange(e.target.value)}
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 py-2.5 pl-9 pr-9 text-xs font-mono text-zinc-100 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 focus:outline-none appearance-none cursor-pointer"
+            >
+              {users.map((u) => (
+                <option key={u.id} value={u.id} className="bg-zinc-900 text-zinc-100 font-mono">
+                  @{u.username} {u.name ? `· ${u.name}` : ""} {u.role === "superadmin" ? "(Superadmin)" : ""}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+          </div>
+        </div>
+      )}
+
       <div>
-        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+        <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
           SMS Message (Urdu / English)
         </label>
         <textarea
@@ -1340,8 +1525,8 @@ function ImportModal({
       </div>
 
       <div>
-        <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-          Phone Number <span className="text-slate-500 font-normal">(optional)</span>
+        <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+          Phone Number <span className="text-zinc-500 font-normal">(optional)</span>
         </label>
         <input
           value={phone}
@@ -1353,12 +1538,12 @@ function ImportModal({
       </div>
 
       <div>
-        <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+        <div className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1.5">
           Detected Tokens ({parsed.length})
         </div>
 
         {parsed.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-800 bg-slate-900 p-4 text-center text-xs text-slate-500">
+          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900 p-4 text-center text-xs text-zinc-500">
             Paste your message above. Vehicle number, token ID, and relief amount will auto-populate.
           </div>
         ) : (
@@ -1368,17 +1553,17 @@ function ImportModal({
                 key={p.tokenNumber}
                 className={`rounded-xl border p-3 text-xs ${
                   match
-                    ? "border-sky-500/40 bg-sky-950/20"
+                    ? "border-amber-500/30 bg-amber-950/20"
                     : "border-emerald-500/30 bg-emerald-950/20"
                 }`}
               >
-                <div className="flex items-center justify-between text-slate-200">
+                <div className="flex items-center justify-between text-zinc-200">
                   <div className="flex items-center gap-2">
                     <span className="font-mono font-bold text-sm text-emerald-400">
                       {p.tokenNumber}
                     </span>
                     {match && (
-                      <span className="rounded bg-sky-500/15 border border-sky-500/30 px-1.5 py-0.5 text-[10px] font-medium text-sky-300">
+                      <span className="rounded bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 text-[10px] font-medium text-amber-300">
                         {match.tokenNumber === p.tokenNumber
                           ? "Updates existing token"
                           : `Updates existing vehicle (${match.vehicleNumber})`}
@@ -1387,7 +1572,7 @@ function ImportModal({
                   </div>
                   <span className="font-semibold">{p.amount != null ? `Rs ${p.amount}` : ""}</span>
                 </div>
-                <div className="mt-1 flex items-center justify-between text-slate-400">
+                <div className="mt-1 flex items-center justify-between text-zinc-400">
                   <span className="font-mono">{p.vehicleNumber || "Unknown Vehicle"}</span>
                   <span>{fmt(p.validUntil)}</span>
                 </div>
@@ -1446,7 +1631,7 @@ function EditModal({
     props: React.InputHTMLAttributes<HTMLInputElement> = {}
   ) => (
     <div>
-      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+      <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
         {label}
       </label>
       <input value={f[k]} onChange={set(k)} className="input text-sm" {...props} />
@@ -1461,13 +1646,13 @@ function EditModal({
       footer={
         <div className="flex gap-2">
           <button
-            className="flex-1 h-11 rounded-xl bg-emerald-500 text-sm font-bold text-slate-950 hover:bg-emerald-400 active:scale-98 transition-colors"
+            className="flex-1 h-11 rounded-xl bg-emerald-500 text-sm font-bold text-zinc-950 hover:bg-emerald-400 active:scale-98 transition-colors"
             onClick={save}
           >
             Save Token
           </button>
           <button
-            className="h-11 rounded-xl border border-slate-700 bg-slate-800 px-4 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700"
+            className="h-11 rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-800 transition-colors"
             onClick={onClose}
           >
             Cancel
@@ -1491,7 +1676,7 @@ function EditModal({
         {field("Validity (PKT)", "validUntil", { type: "datetime-local" })}
 
         <div>
-          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+          <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
             Notes
           </label>
           <textarea
@@ -1518,7 +1703,7 @@ function HistoryModal({ token, onClose }: { token: TokenDTO; onClose: () => void
       onClose={onClose}
       footer={
         <button
-          className="w-full h-11 rounded-xl border border-slate-700 bg-slate-800 text-sm font-semibold text-slate-200 hover:text-white active:bg-slate-700"
+          className="w-full h-11 rounded-xl border border-zinc-800 bg-zinc-800/80 text-sm font-semibold text-zinc-200 hover:text-white active:bg-zinc-800 transition-colors"
           onClick={onClose}
         >
           Close History
@@ -1526,7 +1711,7 @@ function HistoryModal({ token, onClose }: { token: TokenDTO; onClose: () => void
       }
     >
       {list.length === 0 ? (
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-8 text-center text-xs text-slate-500">
+        <div className="rounded-xl border border-zinc-800/90 bg-[#18181b] p-8 text-center text-xs text-zinc-500">
           No previous usages recorded for this token yet.
         </div>
       ) : (
@@ -1534,13 +1719,13 @@ function HistoryModal({ token, onClose }: { token: TokenDTO; onClose: () => void
           {list.map((u, i) => (
             <div
               key={u._id}
-              className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs"
+              className="flex items-center justify-between rounded-xl border border-zinc-800/90 bg-[#18181b] p-3 text-xs shadow-sm"
             >
               <div className="flex items-center gap-2">
-                <span className="flex h-5 w-5 items-center justify-center rounded bg-slate-800 font-mono text-[10px] text-slate-400">
+                <span className="flex h-5 w-5 items-center justify-center rounded bg-zinc-800/90 font-mono text-[10px] text-zinc-400 border border-zinc-700/60">
                   #{list.length - i}
                 </span>
-                <span className="font-mono text-slate-200">{fmt(u.usedAt)}</span>
+                <span className="font-mono text-zinc-200">{fmt(u.usedAt)}</span>
               </div>
               <span className="font-semibold text-emerald-400">
                 {u.amount != null ? `Rs ${u.amount}` : "Used"}
@@ -1553,7 +1738,7 @@ function HistoryModal({ token, onClose }: { token: TokenDTO; onClose: () => void
   );
 }
 
-/* ---------------- Login Modal (Daily Dynamic PIN) ---------------- */
+/* ---------------- Login Modal (Username & Custom Password) ---------------- */
 
 function LoginModal({
   onClose,
@@ -1561,27 +1746,32 @@ function LoginModal({
   onError,
 }: {
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (user: UserSession) => void;
   onError: (m: string) => void;
 }) {
-  const [pin, setPin] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!pin.trim()) return;
+    if (!password.trim()) return;
     setLoading(true);
     try {
       const res = await fetch("/api/auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin: pin.trim() }),
+        body: JSON.stringify({
+          username: username.trim() || "admin",
+          password: password.trim(),
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || "Invalid PIN");
+        throw new Error(data.error || "Invalid username or password");
       }
-      onSuccess();
+      onSuccess(data.user);
     } catch (err: unknown) {
       onError((err as Error).message);
     } finally {
@@ -1591,20 +1781,20 @@ function LoginModal({
 
   return (
     <ModalSheet
-      title="Admin Access Required"
-      subtitle="Enter security PIN to unlock records"
+      title="Login to Account"
+      subtitle="Enter your username and password to unlock records"
       onClose={onClose}
       footer={
         <div className="flex gap-2">
           <button
-            className="flex-1 h-11 rounded-xl bg-emerald-500 text-sm font-bold text-slate-950 hover:bg-emerald-400 active:scale-98 transition-colors disabled:opacity-50"
+            className="flex-1 h-11 rounded-xl bg-emerald-500 text-sm font-bold text-zinc-950 hover:bg-emerald-400 active:scale-98 transition-colors disabled:opacity-50 shadow-sm shadow-emerald-500/20"
             onClick={() => handleSubmit()}
-            disabled={!pin.trim() || loading}
+            disabled={!password.trim() || loading}
           >
-            {loading ? "Verifying..." : "Unlock Access"}
+            {loading ? "Verifying..." : "Login"}
           </button>
           <button
-            className="h-11 rounded-xl border border-slate-700 bg-slate-800 px-4 text-sm font-semibold text-slate-300 hover:text-white active:bg-slate-700"
+            className="h-11 rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-800 transition-colors"
             onClick={onClose}
           >
             Cancel
@@ -1612,20 +1802,41 @@ function LoginModal({
         </div>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-4 py-2">
+      <form onSubmit={handleSubmit} className="space-y-3.5 py-1">
         <div>
-          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
-            Security PIN
+          <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+            Username
           </label>
           <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value.toLowerCase().replace(/\s+/g, ""))}
+            placeholder="Username (e.g. admin)"
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 px-3.5 py-2.5 text-sm text-white font-mono placeholder-zinc-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 focus:outline-none"
             autoFocus
-            type="password"
-            inputMode="numeric"
-            value={pin}
-            onChange={(e) => setPin(e.target.value)}
-            placeholder="Enter PIN"
-            className="input text-base tracking-widest font-mono"
           />
+        </div>
+
+        <div>
+          <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-1">
+            Custom Password
+          </label>
+          <div className="relative">
+            <input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter password"
+              className="w-full rounded-xl border border-zinc-800 bg-zinc-900/90 px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 pr-10 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
         </div>
       </form>
     </ModalSheet>

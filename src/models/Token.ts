@@ -11,6 +11,7 @@ const UsageSchema = new Schema(
 
 const TokenSchema = new Schema(
   {
+    userId: { type: Schema.Types.ObjectId, ref: "User", index: true, default: null },
     tokenNumber: { type: String, required: true, unique: true, trim: true },
     vehicleNumber: { type: String, required: true, uppercase: true, trim: true, index: true },
     phoneNumber: { type: String, default: "", trim: true, index: true },

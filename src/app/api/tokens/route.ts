@@ -3,29 +3,39 @@ import { dbConnect } from "@/lib/mongodb";
 import { Token } from "@/models/Token";
 import { serializeToken } from "@/lib/serialize";
 import { normalizeVehicle } from "@/lib/parseSms";
-import { isAuthenticated } from "@/lib/auth";
+import { getCurrentUser, ensureSuperadminExists } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
-    if (!isAuthenticated(req)) {
+    const currentUser = await getCurrentUser(req);
+    if (!currentUser) {
       return NextResponse.json({ error: "Unauthorized. Please login to view records." }, { status: 401 });
     }
+
     await dbConnect();
+    await ensureSuperadminExists();
 
-    // Auto-heal: Restore any tokens mistakenly placed into cooldown upon import
-    await Token.updateMany(
-      {
-        "usageHistory.note": { $in: ["Imported as availed from SMS", "Marked used from SMS"] },
-        lastUsedAt: { $ne: null },
-      },
-      {
-        $set: { lastUsedAt: null, usageHistory: [] },
+    // Query scoping:
+    // Superadmin can view all tokens or filter by ?userId=...
+    // Regular users can ONLY view their own tokens.
+    const query: Record<string, unknown> = {};
+    const targetUserId = req.nextUrl.searchParams.get("userId");
+
+    if (currentUser.role === "superadmin") {
+      if (targetUserId && targetUserId !== "all") {
+        query.userId = targetUserId;
       }
-    );
+    } else {
+      query.userId = currentUser.userId;
+    }
 
-    const docs = await Token.find().sort({ vehicleNumber: 1, tokenNumber: 1 }).lean();
+    const docs = await Token.find(query)
+      .populate("userId", "username name")
+      .sort({ vehicleNumber: 1, tokenNumber: 1 })
+      .lean();
+
     return NextResponse.json(docs.map(serializeToken));
   } catch (err: unknown) {
     const error = err as Error;
@@ -36,22 +46,33 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    if (!isAuthenticated(req)) {
+    const currentUser = await getCurrentUser(req);
+    if (!currentUser) {
       return NextResponse.json({ error: "Unauthorized. Please login to add tokens." }, { status: 401 });
     }
+
     await dbConnect();
+    await ensureSuperadminExists();
+
     const body = await req.json();
     const tokenNumber = String(body.tokenNumber ?? "").trim();
     const vehicleNumber = normalizeVehicle(String(body.vehicleNumber ?? ""));
     if (!tokenNumber || !vehicleNumber) {
       return NextResponse.json({ error: "Token number and vehicle number are required" }, { status: 400 });
     }
+
+    // Determine target user owner
+    const targetUserId =
+      currentUser.role === "superadmin" && body.userId ? body.userId : currentUser.userId;
+
+    // Check if tokenNumber already exists globally
     if (await Token.exists({ tokenNumber })) {
       return NextResponse.json({ error: "This token number already exists" }, { status: 409 });
     }
 
-    // If a record already exists for this vehicle, update that vehicle's record with the new token
+    // Check if vehicle already exists for this user
     const existingVehicle = await Token.findOne({
+      userId: targetUserId,
       vehicleNumber: new RegExp(
         `^${vehicleNumber.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`,
         "i"
@@ -72,6 +93,7 @@ export async function POST(req: NextRequest) {
     }
 
     const doc = await Token.create({
+      userId: targetUserId,
       tokenNumber,
       vehicleNumber,
       phoneNumber: String(body.phoneNumber ?? "").trim(),
@@ -79,7 +101,10 @@ export async function POST(req: NextRequest) {
       amount: body.amount ? Number(body.amount) : null,
       validUntil: body.validUntil ? new Date(body.validUntil) : null,
       notes: String(body.notes ?? ""),
+      lastUsedAt: null,
+      usageHistory: [],
     });
+
     return NextResponse.json(serializeToken(doc), { status: 201 });
   } catch (err: unknown) {
     const error = err as Error;

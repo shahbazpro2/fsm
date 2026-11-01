@@ -6,6 +6,8 @@ export function serializeToken(doc: any) {
   const { status, nextAvailableAt } = getStatus(o);
   return {
     _id: String(o._id),
+    userId: o.userId ? (typeof o.userId === "object" && o.userId._id ? String(o.userId._id) : String(o.userId)) : null,
+    ownerUsername: typeof o.userId === "object" && o.userId?.username ? String(o.userId.username) : undefined,
     tokenNumber: o.tokenNumber,
     vehicleNumber: o.vehicleNumber,
     phoneNumber: o.phoneNumber ?? "",

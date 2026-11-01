@@ -11,8 +11,8 @@ html {
 }
 
 body {
-  background-color: #090d16;
-  color: #f8fafc;
+  background-color: #09090b;
+  color: #f4f4f5;
   font-family: var(--font-sans);
   overscroll-behavior-y: none;
 }
@@ -42,6 +42,6 @@ body {
 
 @layer components {
   .input {
-    @apply w-full rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-3 text-sm text-white placeholder-slate-500 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500;
+    @apply w-full rounded-xl border border-zinc-800 bg-zinc-900/90 px-3.5 py-3 text-sm text-white placeholder-zinc-500 outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/40;
   }
 }

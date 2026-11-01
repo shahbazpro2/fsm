@@ -1,18 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import { dbConnect } from "@/lib/mongodb";
 import { Token } from "@/models/Token";
+import { User } from "@/models/User";
 import { serializeToken } from "@/lib/serialize";
 import { parseTokenSms } from "@/lib/parseSms";
+import { getCurrentUser, ensureSuperadminExists } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 /**
  * Import one or more token SMS messages.
- * Body: { text: string, phoneNumber?: string, preview?: boolean }
+ * Body: { text: string, phoneNumber?: string, preview?: boolean, userId?: string }
  */
 export async function POST(req: NextRequest) {
   try {
     await dbConnect();
+    const admin = await ensureSuperadminExists();
+
+    const currentUser = await getCurrentUser(req);
 
     let body;
     try {
@@ -21,7 +27,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid JSON request body" }, { status: 400 });
     }
 
-    const { text, phoneNumber, preview } = body || {};
+    const { text, phoneNumber, preview, userId } = body || {};
+
+    // Determine target user to assign tokens to:
+    // If a specific userId was selected, verify it exists.
+    let targetUserId = currentUser ? currentUser.userId : String(admin._id);
+    if (userId) {
+      const selectedUser = await User.findById(userId).lean();
+      if (selectedUser) {
+        targetUserId = String(selectedUser._id);
+      }
+    }
+
     if (!text || typeof text !== "string" || !text.trim()) {
       return NextResponse.json({ error: "No text provided in request" }, { status: 400 });
     }
@@ -36,19 +53,20 @@ export async function POST(req: NextRequest) {
 
     const results = [];
     for (const p of parsed) {
-      let existing = await Token.findOne({ tokenNumber: p.tokenNumber });
+      const scopeQuery: Record<string, unknown> = { userId: targetUserId };
+
+      let existing = await Token.findOne({ tokenNumber: p.tokenNumber, ...scopeQuery });
       let phone = String(phoneNumber ?? "").trim();
       if (!phone && p.vehicleNumber) {
         const sibling = await Token.findOne({
           vehicleNumber: p.vehicleNumber,
           phoneNumber: { $ne: "" },
+          ...scopeQuery,
         }).lean();
         phone = sibling?.phoneNumber ?? "";
       }
 
-      // If no token found by exact tokenNumber, match by vehicleNumber!
-      // In FSM, each vehicle has one record. If a vehicle already exists in the system,
-      // pasting a new token SMS for it updates that vehicle's existing record with the new token number.
+      // If no token found by exact tokenNumber, match by vehicleNumber for this user!
       if (!existing && p.vehicleNumber) {
         const vehicleRegex = new RegExp(
           `^${p.vehicleNumber.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`,
@@ -60,11 +78,13 @@ export async function POST(req: NextRequest) {
           candidate = await Token.findOne({
             vehicleNumber: vehicleRegex,
             phoneNumber: phone,
+            ...scopeQuery,
           }).sort({ updatedAt: -1 });
         }
         if (!candidate) {
           candidate = await Token.findOne({
             vehicleNumber: vehicleRegex,
+            ...scopeQuery,
           }).sort({ updatedAt: -1 });
         }
 
@@ -97,6 +117,7 @@ export async function POST(req: NextRequest) {
         if (p.amount !== null) existing.amount = p.amount;
         if (p.validUntil) existing.validUntil = new Date(p.validUntil);
         if (phone) existing.phoneNumber = phone;
+        existing.userId = new mongoose.Types.ObjectId(targetUserId);
         existing.lastSms = p.raw;
 
         // When a new token is pasted or imported, it is always active and available to use!
@@ -104,7 +125,7 @@ export async function POST(req: NextRequest) {
 
         await existing.save();
 
-        // Automatically clean up any older duplicate records for this same vehicle
+        // Automatically clean up any older duplicate records for this same vehicle in user's scope
         if (p.vehicleNumber) {
           const vehicleRegex = new RegExp(
             `^${p.vehicleNumber.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")}$`,
@@ -113,12 +134,14 @@ export async function POST(req: NextRequest) {
           await Token.deleteMany({
             vehicleNumber: vehicleRegex,
             _id: { $ne: existing._id },
+            ...scopeQuery,
           });
         }
 
         results.push({ action: "updated", token: serializeToken(existing) });
       } else {
         const doc = await Token.create({
+          userId: new mongoose.Types.ObjectId(targetUserId),
           tokenNumber: p.tokenNumber,
           vehicleNumber: p.vehicleNumber || "UNKNOWN",
           phoneNumber: phone,
@@ -137,7 +160,6 @@ export async function POST(req: NextRequest) {
     const error = err as Error;
     console.error("Error in /api/tokens/import:", error);
 
-    // Return the actual error message so user sees exactly what failed
     let message = error.message || "An unexpected error occurred while importing tokens";
     if (message.includes("ENOTFOUND") || message.includes("ETIMEDOUT") || message.includes("querySrv")) {
       message = "Database connection failed. Please check your MONGODB_URI on Vercel and ensure Atlas IP Access List allows 0.0.0.0/0.";

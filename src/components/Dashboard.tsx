@@ -44,7 +44,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-type Filter = "all" | "available" | "used" | "expired";
+type Filter = "all" | "available" | "used" | "need_renew" | "expired";
 
 const TZ = "Asia/Karachi";
 const fmt = (iso: string | null) =>
@@ -107,6 +107,12 @@ const STATUS_CONFIG: Record<
     accent: "bg-amber-500",
     icon: Hourglass,
   },
+  need_renew: {
+    label: "Need Renew",
+    badge: "bg-sky-500/12 text-sky-300 border border-sky-500/25",
+    accent: "bg-sky-500",
+    icon: RefreshCw,
+  },
   expired: {
     label: "Expired",
     badge: "bg-rose-500/12 text-rose-300 border border-rose-500/25",
@@ -119,6 +125,7 @@ const TABS: { key: Filter; label: string }[] = [
   { key: "all", label: "All" },
   { key: "available", label: "Available" },
   { key: "used", label: "Cooldown" },
+  { key: "need_renew", label: "Need Renew" },
   { key: "expired", label: "Expired" },
 ];
 
@@ -292,14 +299,27 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   };
 
   const counts = useMemo(() => {
-    const c = { all: tokens.length, available: 0, used: 0, expired: 0 };
-    tokens.forEach((t) => c[t.status]++);
+    const c: Record<Filter, number> = {
+      all: tokens.length,
+      available: 0,
+      used: 0,
+      need_renew: 0,
+      expired: 0,
+    };
+    tokens.forEach((t) => {
+      if (c[t.status] !== undefined) c[t.status]++;
+    });
     return c;
   }, [tokens]);
 
   const visible = useMemo(() => {
     const s = q.trim().toLowerCase().replace(/[\s-]/g, "");
-    const order = { available: 0, used: 1, expired: 2 };
+    const order: Record<TokenDTO["status"], number> = {
+      available: 0,
+      used: 1,
+      need_renew: 2,
+      expired: 3,
+    };
     return tokens
       .filter((t) => {
         if (filter !== "all" && t.status !== filter) return false;
@@ -340,10 +360,18 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
   };
 
   const markUsed = (t: TokenDTO) => {
+    if (t.status === "expired") {
+      notify("Token is expired and cannot be marked as used", true);
+      return;
+    }
+    if (t.status === "need_renew") {
+      notify("Token cooldown has ended. Please paste a new token SMS to renew.", true);
+      return;
+    }
     if (t.status === "used") {
       setConfirmState({
         title: "Token in cooldown",
-        message: `Valid again on ${fmt(t.nextAvailableAt)}. Mark as used anyway?`,
+        message: `Cooldown ends on ${fmt(t.nextAvailableAt)}. Mark as used anyway?`,
         action: "Mark Used",
         onYes: () => doUse(t, true),
       });
@@ -760,6 +788,7 @@ export default function Dashboard({ sharedText }: { sharedText?: string }) {
           onClose={() => setDetailFor(null)}
           onUse={() => requireAuth(() => markUsed(detailFor))}
           onUndo={() => requireAuth(() => undoUse(detailFor))}
+          onRenew={() => setImportText("")}
           onCopy={() => copy(detailFor.tokenNumber)}
           onEdit={() => {
             const t = detailFor;
@@ -1009,8 +1038,8 @@ function TokenListItem({
             <Undo2 className="h-3.5 w-3.5" />
             <span>Undo</span>
           </button>
-        ) : (
-          /* High-contrast attractive solid Use button */
+        ) : t.status === "available" ? (
+          /* High-contrast attractive solid Use button - ONLY when not used and not expired */
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1021,9 +1050,20 @@ function TokenListItem({
             <Check className="h-3.5 w-3.5" strokeWidth={3} />
             <span>Use</span>
           </button>
-        )}
+        ) : t.status === "need_renew" ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect();
+            }}
+            className="flex h-9 items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/20 active:scale-95"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Renew</span>
+          </button>
+        ) : null}
 
-        <div className="flex h-8 w-8 items-center justify-center text-zinc-500 group-hover:text-zinc-300 transition-colors">
+        <div className="flex h-8 w-8 items-center justify-center text-zinc-500 group-hover:text-zinc-300 transition-colors ml-auto sm:ml-0">
           <ChevronRight className="h-4 w-4" />
         </div>
       </div>
@@ -1109,6 +1149,7 @@ function DetailModal({
   onClose,
   onUse,
   onUndo,
+  onRenew,
   onCopy,
   onEdit,
   onDelete,
@@ -1118,6 +1159,7 @@ function DetailModal({
   onClose: () => void;
   onUse: () => void;
   onUndo: () => void;
+  onRenew: () => void;
   onCopy: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -1142,7 +1184,7 @@ function DetailModal({
               <Undo2 className="h-4 w-4" />
               <span>Undo Last Use</span>
             </button>
-          ) : (
+          ) : token.status === "available" ? (
             <button
               className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-500 text-sm font-bold text-zinc-950 transition hover:bg-emerald-400 active:scale-98 shadow-sm shadow-emerald-500/20"
               onClick={onUse}
@@ -1150,10 +1192,23 @@ function DetailModal({
               <Check className="h-4 w-4" strokeWidth={2.5} />
               <span>Mark as Used</span>
             </button>
-          )}
+          ) : token.status === "need_renew" ? (
+            <button
+              className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-xl border border-sky-500/30 bg-sky-500/10 text-sm font-bold text-sky-300 transition hover:bg-sky-500/20 active:scale-98"
+              onClick={() => {
+                onClose();
+                onRenew();
+              }}
+            >
+              <RefreshCw className="h-4 w-4" />
+              <span>Paste New Token (Renew)</span>
+            </button>
+          ) : null}
 
           <button
-            className="flex h-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-700 transition-colors"
+            className={`flex h-11 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-800/80 px-4 text-sm font-semibold text-zinc-300 hover:text-white active:bg-zinc-700 transition-colors ${
+              token.status === "expired" ? "flex-1" : ""
+            }`}
             onClick={onClose}
           >
             Close
@@ -1209,8 +1264,12 @@ function DetailModal({
           </div>
           <div className="mt-1 text-[11px] text-zinc-400 truncate">
             {token.status === "used"
-              ? `Renew: ${fmt(token.nextAvailableAt)}`
-              : token.status === "available" && validFuture
+              ? `Cooldown until ${fmt(token.nextAvailableAt)}`
+              : token.status === "need_renew"
+              ? "Cooldown completed · Update needed"
+              : token.status === "expired"
+              ? "Expired before use"
+              : validFuture
               ? `Expires: ${fmt(token.validUntil)}`
               : "Ready to use"}
           </div>
@@ -1223,9 +1282,29 @@ function DetailModal({
           <div className="flex items-center justify-between text-amber-300">
             <span className="flex items-center gap-1.5 text-zinc-400">
               <Hourglass className="h-3.5 w-3.5 text-amber-400" />
-              <span>Renew in</span>
+              <span>Cooldown ends in</span>
             </span>
             <span className="font-bold">{timeLeft(token.nextAvailableAt)}</span>
+          </div>
+        )}
+
+        {token.status === "need_renew" && (
+          <div className="flex items-center justify-between text-sky-400">
+            <span className="flex items-center gap-1.5 text-zinc-400">
+              <RefreshCw className="h-3.5 w-3.5 text-sky-400" />
+              <span>Renewal Status</span>
+            </span>
+            <span className="font-bold">Ready for new token</span>
+          </div>
+        )}
+
+        {token.status === "expired" && (
+          <div className="flex items-center justify-between text-rose-400">
+            <span className="flex items-center gap-1.5 text-zinc-400">
+              <CalendarX2 className="h-3.5 w-3.5 text-rose-400" />
+              <span>Status</span>
+            </span>
+            <span className="font-bold">Expired before use</span>
           </div>
         )}
 

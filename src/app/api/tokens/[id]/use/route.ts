@@ -34,6 +34,18 @@ export async function POST(req: NextRequest, { params }: Ctx) {
         { status: 409 }
       );
     }
+    if (status === "expired" && !body.force) {
+      return NextResponse.json(
+        { error: "Token is expired and cannot be marked as used" },
+        { status: 400 }
+      );
+    }
+    if (status === "need_renew" && !body.force) {
+      return NextResponse.json(
+        { error: "Token cooldown has ended. Please paste a new token SMS to renew." },
+        { status: 400 }
+      );
+    }
 
     const usedAt = body.usedAt ? new Date(body.usedAt) : new Date();
     doc.usageHistory.push({ usedAt, amount: body.amount ?? doc.amount ?? null, note: body.note ?? "" });
